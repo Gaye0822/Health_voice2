@@ -1,0 +1,12 @@
+# AI
+anthropic>=0.40.0
+openai>=1.50.0
+
+# Database
+psycopg2-binary>=2.9.9
+
+# Environment
+python-dotenv>=1.0.0
+
+# UI
+streamlit>=1.40.0

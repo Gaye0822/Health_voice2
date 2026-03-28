@@ -1,0 +1,78 @@
+# ─────────────────────────────────────────
+# Health Voice System — .gitignore
+# ─────────────────────────────────────────
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Audio files — never commit patient data
+*.m4a
+*.mp3
+*.wav
+*.ogg
+*.aac
+*.flac
+
+# Temporary files
+/tmp/
+temp/
+*.tmp
+
+# Logs
+*.log
+logs/
+
+# Database
+*.sql
+*.dump
+*.db
+*.sqlite3
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Batch outputs / test data with real transcripts
+batch_notes/
+real_transcripts/
+outputs/
