@@ -122,6 +122,12 @@ LABEL RULE:
 - Specific named entity only
 - Vague or unresolvable label → omit entirely
 
+MEAL RULE:
+- Capture: label, time, eaten_out (true/false), restaurant name if mentioned
+- Do NOT populate items with ingredient lists, gram-level breakdown, or full meal content
+- If eaten_out is true and a restaurant name is mentioned → put it in notes
+- Detailed food content belongs in a downstream food system, not here
+
 ─────────────────────────────────────────
 EXAMPLES
 ─────────────────────────────────────────

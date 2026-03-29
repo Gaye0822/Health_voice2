@@ -116,7 +116,10 @@ measurement
   Subjective scores, exercise performance metrics, and dietary estimates do not.
 
 meal
-  An eating event with identifiable content or timing.
+  An eating event. Capture timing and whether it was eaten out.
+  If a restaurant name is mentioned, capture it.
+  Do NOT extract ingredient lists, gram-level detail, or full meal content —
+  that belongs in a separate food system.
 
 theory
   The user's own speculation, causal explanation, or personal interpretation.
