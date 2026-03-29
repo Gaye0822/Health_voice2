@@ -1,0 +1,130 @@
+{
+  "transcript": "it's ten past nine evening or so a bit of a chaotic day honestly let\nme try to remember everything in order so I did the treadmill in the\nmorning actually no it was late morning like 11.30 35 minutes I was\ndoing a point no 7.8 miles per hour incline was 1.5 felt solid no issues\nthen I had lunch at home I don't know maybe one o'clock I made some eggs\nand avocado and some of the sourdough that was left quick meal afternoon\nwas mostly work sitting on calls I did take actually I should mention I\nhad a weird thing happen around 3 p.m. got really cold suddenly like a\nchill and felt a bit dizzy for maybe five minutes and then it just\npassed I don't know what that was probably nothing I had some I had a\nsnack actually almond and some dark chocolate around 4 took the\nafternoon supplements after that which is just the vitamin D and K2 and\nfish oil evening I was supposed to do the sauna but by the time I\nfinished the last call it was already 8.30 and I just couldn't face it\nhad dinner some leftovers chicken thing and roasted vegetables finished\neating by about 9.15 took magnesium glycinate and the glycine just now\nfor before this recording that's I think everything sleep well actually\ngood last night seven hours 20 minutes according to Oura Ring HRV was 68\nat the start of the night can't remember the other stats",
+  "entities": [
+    {
+      "type": "activity",
+      "label": "treadmill",
+      "start_time": "11:30",
+      "duration": "35 minutes",
+      "status": "completed",
+      "notes": "7.8 mph, 1.5 incline, felt solid no issues"
+    },
+    {
+      "type": "meal",
+      "label": "lunch",
+      "time": "1:00 PM",
+      "eaten_out": false,
+      "items": [
+        "eggs",
+        "avocado",
+        "sourdough bread"
+      ]
+    },
+    {
+      "type": "symptom",
+      "label": "chills",
+      "onset_time": "3:00 PM",
+      "severity": null,
+      "qualifier": "sudden onset",
+      "duration": "5 minutes"
+    },
+    {
+      "type": "symptom",
+      "label": "dizziness",
+      "onset_time": "3:00 PM",
+      "severity": null,
+      "qualifier": null,
+      "duration": "5 minutes"
+    },
+    {
+      "type": "meal",
+      "label": "snack",
+      "time": "4:00 PM",
+      "eaten_out": null,
+      "items": [
+        "almonds",
+        "dark chocolate"
+      ]
+    },
+    {
+      "type": "intake",
+      "label": "vitamin D",
+      "action": "took",
+      "dose": null,
+      "unit": null,
+      "time": "after 4:00 PM",
+      "category": "supplement",
+      "notes": null
+    },
+    {
+      "type": "intake",
+      "label": "K2",
+      "action": "took",
+      "dose": null,
+      "unit": null,
+      "time": "after 4:00 PM",
+      "category": "supplement",
+      "notes": null
+    },
+    {
+      "type": "intake",
+      "label": "fish oil",
+      "action": "took",
+      "dose": null,
+      "unit": null,
+      "time": "after 4:00 PM",
+      "category": "supplement",
+      "notes": null
+    },
+    {
+      "type": "meal",
+      "label": "dinner",
+      "time": "finished by 9:15 PM",
+      "eaten_out": false,
+      "items": [
+        "leftover chicken",
+        "roasted vegetables"
+      ]
+    },
+    {
+      "type": "intake",
+      "label": "magnesium glycinate",
+      "action": "took",
+      "dose": null,
+      "unit": null,
+      "time": "just before recording",
+      "category": "supplement",
+      "notes": null
+    },
+    {
+      "type": "intake",
+      "label": "glycine",
+      "action": "took",
+      "dose": null,
+      "unit": null,
+      "time": "just before recording",
+      "category": "supplement",
+      "notes": null
+    },
+    {
+      "type": "measurement",
+      "metric": "sleep duration",
+      "value": 7.33,
+      "unit": "hours",
+      "time": null,
+      "source": "Oura Ring"
+    },
+    {
+      "type": "measurement",
+      "metric": "HRV",
+      "value": 68.0,
+      "unit": null,
+      "time": "start of night",
+      "source": "Oura Ring"
+    },
+    {
+      "type": "outside",
+      "raw_text": "evening I was supposed to do the sauna but by the time I finished the last call it was already 8.30 and I just couldn't face it"
+    }
+  ]
+}

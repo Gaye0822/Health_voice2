@@ -1,0 +1,37 @@
+{
+  "transcript": "Okay, this is a weird one to log because I'm not sure what's\nhappening and I don't want to catastrophize but I also want to get it on\nrecord. So the last four or five days, maybe five, I've been having this\nintermittent twitching in my left calf like a muscle fasciculation comes\nand goes. Actually, usually in the evening when I'm sitting down, not\nduring exercise. It's completely painless, just disconcerting. I have\nbeen googling which I know I shouldn't. It could be magnesium deficiency\nbut I'm already taking magnesium glycinate so that seems unlikely. Could\nbe dehydration. I have been a bit low on water this week. Could be just\nsome people get this. They're benign, totally normal, especially if\nyou're exercising a lot. Or there's the anxiety connection. I have been\nmore stressed lately. The berberine dose change was three weeks ago so\nprobably not that. I'm going to mention it to a doctor next time. I\ntalked to him but I don't want to have a whole call about it. I have\nbeen trying to just ignore. It's been there again tonight while I'm\nrecording this.\n\n\ud83d\udd34 SYMPTOM \u2014 muscle fasciculation\n\n{\n\n\"type\":\n\n\"symptom\"\n\n\"label\":\n\n\"muscle fasciculation\"\n\n\"onset_time\":\n\nNULL\n\n\"severity\":\n\nNULL\n\n\"qualifier\":\n\n\"intermittent twitching in left calf, painless, occurs in evening when\nsitting\"\n\n\"duration\":\n\n\"4-5 days\"\n\n}\n\n\ud83d\udc8a INTAKE \u2014 magnesium glycinate\n\n{\n\n\"type\":\n\n\"intake\"\n\n\"label\":\n\n\"magnesium glycinate\"\n\n\"action\":\n\n\"took\"\n\n\"dose\":\n\nNULL\n\n\"unit\":\n\nNULL\n\n\"time\":\n\nNULL\n\n\"category\":\n\n\"supplement\"\n\n\"notes\":\n\nNULL\n\n}",
+  "entities": [
+    {
+      "type": "symptom",
+      "label": "muscle fasciculation",
+      "onset_time": null,
+      "severity": null,
+      "qualifier": "intermittent twitching in left calf, painless, occurs in evening when sitting",
+      "duration": "4-5 days"
+    },
+    {
+      "type": "theory",
+      "raw_text": "It could be magnesium deficiency",
+      "linked_to_label": "muscle fasciculation",
+      "linked_to_type": "symptom"
+    },
+    {
+      "type": "theory",
+      "raw_text": "Could be dehydration",
+      "linked_to_label": "muscle fasciculation",
+      "linked_to_type": "symptom"
+    },
+    {
+      "type": "theory",
+      "raw_text": "Could be just some people get this. They're benign, totally normal",
+      "linked_to_label": "muscle fasciculation",
+      "linked_to_type": "symptom"
+    },
+    {
+      "type": "theory",
+      "raw_text": "Or there's the anxiety connection",
+      "linked_to_label": "muscle fasciculation",
+      "linked_to_type": "symptom"
+    }
+  ]
+}

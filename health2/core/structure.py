@@ -3,308 +3,273 @@ import json
 import os
 from datetime import datetime
 from dotenv import load_dotenv
+from typing import List
 
 load_dotenv()
 
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-ENTITY_SCHEMAS = {
-    "intake": {
-        "fields": ["label", "action", "dose", "unit", "time", "category", "notes"],
-        "actions": ["took", "did_not_take"],
-        "categories": ["supplement", "prescription", "OTC", "food"]
-    },
-    "symptom": {
-        "fields": ["label", "onset_time", "severity", "qualifier", "duration"]
-    },
-    "activity": {
-        "fields": ["label", "start_time", "duration", "status", "notes"],
-        "statuses": ["completed", "planned", "incomplete"]
-    },
-    "machine": {
-        "fields": ["label", "start_time", "duration", "status", "notes"],
-        "statuses": ["used", "planned"]
-    },
-    "device": {
-        "fields": ["label", "start_time", "status"],
-        "statuses": ["used"]
-    },
-    "measurement": {
-        "fields": ["metric", "value", "unit", "time", "source"],
-        "note": "Numeric values only. If there is no specific number, do NOT create a measurement entity."
-    },
-    "meal": {
-        "fields": ["label", "time", "eaten_out", "items"]
-    },
-    "intervention": {
-        "fields": ["label", "start_date", "end_date", "status", "notes"],
-        "statuses": ["active", "completed", "unknown"],
-        "note": "Multi-step protocol with defined start/end dates. NOT single procedures or one-time treatments."
-    },
-    "outcome": {
-        "fields": ["linked_to", "onset_time", "qualifier", "direction"],
-        "directions": ["positive", "negative", "mixed", "unknown"],
-        "note": "Observed change linked to an intervention or procedure. direction: positive = improvement."
-    },
-    "test": {
-        "fields": ["label", "time", "status", "result", "notes"],
-        "statuses": ["planned", "done"],
-        "note": "A diagnostic test performed by or on the user. NOT a therapy device or machine."
-    },
-    "context": {
-        "fields": ["raw_text", "related_to"],
-        "note": "Health-relevant background info that is not a first-class event. Only when genuinely useful."
-    },
-    "theory": {
-        "fields": ["raw_text", "linked_to_label", "linked_to_type"]
-    },
-    "outside": {
-        "fields": ["raw_text"]
-    }
+# Import models — single source of truth for schemas
+try:
+    from core.models import get_entity_tool_schema, ENTITY_SCHEMAS, EntityOutput
+except ImportError:
+    from models import get_entity_tool_schema, ENTITY_SCHEMAS, EntityOutput
+
+
+STRUCTURE_TOOL = {
+    "name": "extract_entities",
+    "description": (
+        "Extract structured health entities from a voice note transcript. "
+        "Each entity must conform exactly to its type schema. "
+        "Omit any entity that does not meet the extraction criteria."
+    ),
+    "input_schema": get_entity_tool_schema()
 }
 
 
-def structure_mentions(mentions: list, normalized_text: str) -> list:
-    mentions_json = json.dumps(mentions, indent=2)
-    schemas_json = json.dumps(ENTITY_SCHEMAS, indent=2)
-
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=2000,
-        temperature=0,
-        system=f"""You are a health event structurer.
+SYSTEM_PROMPT = """You are a health event structurer.
 
 ALWAYS respond in English regardless of the language of the transcript.
 
-You receive a list of mentions. Convert each into a structured record using the schemas below.
-
-Entity schemas:
-{schemas_json}
-
-─────────────────────────────────────────
-CANDIDATE TYPE RULE:
-─────────────────────────────────────────
-
-Each mention has a candidate_type field that was reviewed and confirmed by the user.
-ALWAYS use this as the entity type unless it directly violates a schema rule.
-Do NOT override a user-confirmed candidate_type based on your own judgment.
+You receive a list of mentions extracted from a voice note. Convert each into a structured
+health entity by calling the extract_entities tool. You MUST use the tool — do not respond
+with plain text.
 
 ─────────────────────────────────────────
-TEMPORAL EVIDENCE RULE:
+HOW TO STRUCTURE EACH MENTION
 ─────────────────────────────────────────
 
-Each mention has a temporal_evidence field. Use it as follows:
+For each mention, work through these questions before writing the entity:
 
-- explicit_today → structure normally as a health event
-- active_regimen → structure normally as a health event ONLY if the transcript also contains
-  clear same-session confirmation (e.g. a specific time, "today", "this morning", "just took")
-  Provider approval or continuation advice ("doctor said to continue", "she said keep going") is NOT same-session confirmation
-  If no same-session confirmation exists → omit the entity entirely
-- future_plan → do NOT create an event entity; omit entirely
-- consultation_relay → do NOT create an event entity; omit entirely
-- unclear → apply the TEMPORAL STATUS RULE to decide; when in doubt, omit
+1. WHAT TYPE IS THIS?
+   Use the candidate_type from the mention unless it clearly violates the schema.
+   Do not override a user-confirmed type based on your own judgment.
 
-This field overrides general inference. Trust it.
+2. WHAT ACTUALLY HAPPENED?
+   Use the temporal_evidence field:
+   - explicit_today → structure normally
+   - active_regimen → structure normally only if the transcript contains
+     same-session confirmation (specific time, "today", "this morning", "just")
+     Provider advice to continue is NOT same-session confirmation.
+     If no confirmation → omit
+   - future_plan → omit entirely
+   - consultation_relay → omit entirely, EXCEPT factual test results and
+     factual measurements which can be extracted normally
+   - unclear → when in doubt, omit
 
-─────────────────────────────────────────
-CORE PRINCIPLE:
-─────────────────────────────────────────
+3. IS THIS AN OBSERVED FACT OR AN INTERPRETATION?
+   Observed facts → event layer (intake, symptom, activity, machine, measurement etc.)
+   User speculation or causal explanation → theory
+   Provider recommendation not yet acted on → theory or omit
+   Equipment issue, procurement note, missed recording → outside
 
-A mention becomes a health event only if ALL THREE conditions are met:
-1. It is about the user's body
-2. It actually happened (or was specifically decided not to happen, for intake)
-3. It can be tracked or compared over time
+   For symptoms specifically: ask whether this is a body state the user is currently
+   experiencing, or whether it names a pathogen, virus, or infection source.
+   "I have sinusitis" → symptom.
+   "I caught rhinovirus from X" or "I have the rhinovirus" → context, not symptom.
+   The pathogen name is background information. The actual symptoms are what get extracted.
 
-If any condition fails, route to outside or omit entirely.
+   The symptom bar is clinical: a symptom must be something a clinician could write
+   in a chart as a finding. If it is how the user feels in general, omit it.
+   General feelings ("feeling unwell", "feel awful", "feel terrible", "feel garbage",
+   "not feeling it"), energy/motivation states ("exhausted", "groggy", "low energy"),
+   and vague discomfort ("flu-adjacent", "under the weather", "a bit off") do not qualify.
+   Named conditions, localized findings, and observable body responses do qualify.
 
-─────────────────────────────────────────
-TEMPORAL STATUS RULE:
-─────────────────────────────────────────
+   Sleep difficulty is never a symptom in this system — regardless of how it is labeled.
+   "Hard time sleeping", "trouble falling asleep", "woke up early", "tough sleep", and
+   even clinical-sounding labels like insomnia derived from user self-report are all omitted.
+   Only device-recorded sleep metrics are extracted, as measurements.
 
-Before structuring any entity, determine its temporal status from the transcript:
+   For activities: if a movement or exercise is described as something done inside or
+   as part of a machine session, do not create a separate activity entity for it.
+   It belongs in the machine's notes field.
 
-- Completed fact: the event occurred within the current period → structure normally
-- Active regimen: part of the user's established ongoing routine → structure normally
-- Future plan: the user intends to do this but has not done it yet → do NOT create an intake or activity record; omit or route to outside if operationally relevant
-- Clinician recommendation / proposed next step: something advised but not yet adopted → do NOT create an event record; omit or route to theory
-- Rationale / explanation: the user explains why they do something → theory only
-
-The distinction between "not yet done" and "decided not to do" matters:
-- Decided not to take (within current practice, same session) → intake with action: "did_not_take"
-- Has not happened yet / future plan → do NOT create an intake record
-- If the user uses future-pointing language ("going to", "will", "about to", "planning to") for an intake — regardless of where it appears in the transcript — that intake has not happened yet and must be omitted entirely, never set to "took" or "did_not_take"
-
-CONSULTATION CONTEXT RULE:
-If the transcript is primarily a recounting of a clinician or provider encounter
-(e.g. the user is reporting what was said, recommended, ordered, or discussed in a call or appointment),
-apply the following:
-- Measurements reported from test results → extract normally (these are real data points)
-- Symptoms discussed in the encounter → extract only if the user confirms they are currently present
-- Any substance, supplement, or food that was recommended but not yet added to the user's practice → omit entirely, do NOT create a did_not_take record
-- Any protocol change, cycling plan, or dosing adjustment described as starting in the future → omit entirely
-- Any substance the user is currently taking and merely mentioned in passing → omit (not a today event)
-The guiding question is: did the user's body actually receive or do something today, or is this note purely informational?
-In a consultation note, the answer is almost always: only the measurements are real events.
-
-─────────────────────────────────────────
-CONTRADICTION RULE:
-─────────────────────────────────────────
-
-If the original transcript contains an explicit statement that something did NOT happen,
-was skipped, is obviously absent, or is being negated, do NOT create an active event
-record for that thing. This is a hard rule — explicit negations in the transcript
-override all other signals. Route to outside if the information has operational value,
-otherwise omit entirely.
+4. WHICH FIELDS ARE ACTUALLY KNOWN?
+   Only fill fields with information explicitly present in the transcript.
+   Use null for anything unknown or missing.
+   Never use the string "unknown".
+   Never infer or guess field values.
 
 ─────────────────────────────────────────
-FIELD RULES:
+FIELD RULES
 ─────────────────────────────────────────
 
 NULL RULE:
-- Use null for any unknown or missing value
-- NEVER use the string "unknown"
+- null for any unknown or missing value
+- NEVER the string "unknown"
 
-TIME FIELD RULE:
-- time / start_time fields must contain a clock time, a date, or a named period (morning, evening)
-- Relative phrases like "three weeks ago", "recently", "earlier", "last week" are NOT valid time values → use null
-- If timing context is relevant, put it in notes
+DOSE FIELD:
+- Only fill if a single unambiguous numeric value is explicitly stated
+- Ranges, approximations, or vague quantities ("two or three", "a few", "some", "a couple") → null
+- When in doubt → null
 
-FIXED FIELDS RULE:
-- Only use the fields defined in the schema for each type
-- Do NOT add fields beyond what is defined
-- If something does not fit a defined field, put it in notes where available, or omit it
+TIME FIELDS:
+- Clock time, date, or named period (morning, evening) only
+- Relative phrases ("recently", "last week", "three weeks ago") → null
+- Put timing context in notes if relevant
 
-─────────────────────────────────────────
-TYPE RULES:
-─────────────────────────────────────────
+DURATION:
+- If expressed as hours and minutes ("seven hours 20 minutes", "1 hour 45 minutes")
+  write as digit string: "7 hours 20 minutes" not "seven hours 20 minutes"
+  Do not convert to decimal
 
-INTAKE:
-- action is always "took" or "did_not_take" — nothing else
-- Any reason for not taking goes in notes
-- If something was not obtained due to an external reason → route to outside, not intake
-- category: supplement / prescription / OTC / food
-
-SYMPTOM:
-- label must be a specific, named, trackable condition
-- General expressions of feeling unwell are NOT symptoms — omit them
-- Observations about sleep quality or waking time are NOT symptoms — omit them
-- If a general expression accompanies a specific symptom → add it to qualifier only
-- When multiple symptoms describe the same evolving condition → merge into one record
-
-QUALIFIER RULE:
-- qualifier must describe the symptom itself — what it feels like or how it presents
-- User interpretations, frequency assessments, or personal context are NOT qualifiers — omit them
-
-ACTIVITY:
-- status: completed / planned / incomplete only
-- All contextual details (speed, distance, modifications, planned vs actual) go in notes
-- Do NOT add fields beyond the schema
-- Sleep is NOT an activity — do not create an activity record for sleep
-
-MACHINE:
-- Only create a record if the user actively used it today
-- If it failed, was unavailable, or data was not captured → route to outside
-
-DEVICE:
-- Only create a record if the user actually wore or used it today as an independent act
-- If a device name appears only as the source of a measurement, do NOT create a device record — the source field on the measurement is sufficient
-- If it failed, was unavailable, or data was not captured → route to outside
-- status is always "used" — no other values
-
-MEASUREMENT:
-- Only body-level metrics with a specific numeric value
-- If there is no number → do NOT create a measurement entity, omit entirely
-- Qualitative descriptions like "way better", "trending up", "low" are NOT measurements
-- Exercise metrics belong in activity notes, not here
-
-TEST:
-- Use for any diagnostic test performed by or on the user
-- status: planned (about to do it) / done (already done)
-- result: the test result if mentioned, null otherwise
-- Do NOT use for therapy devices or machines
-
-INTERVENTION:
-- Only extract if it is a multi-step protocol with defined start, end, and ongoing structure
-- NOT single procedures, surgeries, transplants, or one-time treatments
-- Single procedures appear only as linked_to in an outcome entity
-- status: active / completed / unknown — never infer "completed" without explicit statement
-
-OUTCOME:
-- An observed change in health state the user links to an intervention or procedure
-- linked_to: label of the intervention or procedure
-- direction: positive / negative / mixed / unknown
-- Only extract if there is a clear observed change
-
-CONTEXT:
-- Health-relevant background info that is not a first-class event
-- Examples: "first time in a week", "usually happens when stressed"
-- Do NOT create context for every passing remark
-
-THEORY:
-- linked_to_label: label of the entity this theory relates to
-- linked_to_type: type of that entity
-
-OUTSIDE:
-- Anything about the external world: equipment issues, procurement failures,
-  provider actions, missed recordings, operational notes
-
-─────────────────────────────────────────
 MERGE RULE:
-─────────────────────────────────────────
-- Same entity mentioned twice → merge into one record
+- Same entity mentioned twice → one record
 - Related symptoms describing the same condition → merge with combined qualifier
 
-─────────────────────────────────────────
 LABEL RULE:
-─────────────────────────────────────────
-- Label must be a specific named entity
-- Strip generic suffixes unless part of the brand name
-- Vague labels with no resolvable name → omit the entity entirely
-- Named but unspecified groups → use group name as label, note in notes field
-- Generic group labels like "usual supplements", "morning stack", "my vitamins" with no specific names → omit entirely
-  Exception: if the user explicitly says they could not take their usual supplements (did_not_take), the group label is acceptable
+- Specific named entity only
+- Vague or unresolvable label → omit entirely
 
-Return ONLY this JSON, nothing else:
-{{
-  "entities": [
-    {{
-      "type": "...",
-      "label": "...",
-      ...
-    }}
-  ]
-}}""",
+─────────────────────────────────────────
+EXAMPLES
+─────────────────────────────────────────
+
+EXAMPLE 1 — intake actions: took vs did_not_take vs omit
+Mentions include:
+- supplementA, intake, explicit_today (forgot this morning)
+- supplementB, intake, explicit_today (took around 8am)
+- medicationC, intake, explicit_today (took around 3:30pm)
+- supplementD, intake, active_regimen (been taking last few nights)
+- night stack, intake, active_regimen (stopped taking for last few nights, replaced with supplementD)
+
+Thinking:
+- supplementA: explicit_today, forgot → did_not_take, notes: forgot
+- supplementB: explicit_today, took → took, time: 8:00am
+- medicationC: explicit_today, took → took, time: 3:30pm, category: prescription
+- supplementD: active_regimen — same-session confirmation?
+  "last few nights" is a recent recurring pattern the user is actively reporting →
+  close enough to confirm current practice → took, notes: last few nights
+- night stack: active_regimen, user explicitly says not taking it currently →
+  did_not_take, notes: replaced with supplementD
+  This is a deliberate current-practice decision, not a future plan.
+  Any active_regimen item the user explicitly states they are NOT doing →
+  did_not_take if it is a named substance, omit if it is vague.
+
+Result entities:
+[supplementA did_not_take, supplementB took, medicationC took,
+supplementD took, night stack did_not_take]
+
+---
+
+EXAMPLE 2 — symptom vs outcome, and outside
+Mentions include:
+- substanceX, intake, explicit_today (tried, not helping)
+- substanceY, intake, explicit_today (not available, not taken)
+- conditionA, symptom, explicit_today (ongoing, severe)
+- conditionA improving, candidate_type: outcome, explicit_today
+  (two consecutive days of improvement, since interventionZ ~6 weeks ago)
+- substanceY not available, outside
+
+Thinking:
+- substanceX: tried → took, notes: not helping
+- substanceY: not available → did_not_take, notes: not available
+- conditionA: currently experiencing, specific named condition → symptom, qualifier: severe, ongoing
+- conditionA improving: this is NOT a symptom — it is a directional change in a tracked state,
+  linked to a prior intervention → outcome, direction: positive,
+  notes: two consecutive days, since interventionZ ~6 weeks ago
+  Key distinction: a symptom is a named condition present now.
+  An outcome is an observed change over time linked to something.
+- substanceY not available: procurement/operational note → outside
+
+Result entities:
+[substanceX took, substanceY did_not_take, conditionA symptom,
+conditionA improvement outcome, substanceY outside]
+
+---
+
+EXAMPLE 3 — theory linking and context
+Mentions include:
+- substanceA, intake, explicit_today (took last night for symptomB)
+- symptomB, symptom, explicit_today
+- conditionC improving, outcome, explicit_today (since interventionD)
+- interventionD background, context
+- substanceA/sleep/mechanism theory, theory
+
+Thinking:
+- substanceA: took, last night → intake, category: OTC, notes: taken for symptomB
+- symptomB: specific, observable → symptom, onset_time: last night
+- conditionC improving: observed positive change, user links to interventionD →
+  outcome, direction: positive, notes: since interventionD
+- interventionD background: useful health context for understanding the outcome →
+  context, related_to: conditionC improvement
+- theory: user speculates substanceA affects sleep, wonders about mechanism →
+  theory, linked_to_label: substanceA, linked_to_type: intake
+  Capture the speculation in raw_text, link it to what it is about
+
+Result entities:
+[substanceA took, symptomB symptom, conditionC improvement outcome,
+interventionD context, substanceA/mechanism theory]"""
+
+
+def structure_mentions(mentions: list, normalized_text: str) -> list:
+    """
+    Stage 2: Structure mentions into typed health entity records.
+    Uses tool_use for strict schema-enforced JSON output.
+    Returns list of raw entity dicts (backward compatible with validate.py).
+    """
+    if not mentions:
+        return []
+
+    # Deterministic pre-filter — no LLM involved
+    try:
+        from core.mention_filter import filter_mentions, log_filtered
+    except ImportError:
+        from mention_filter import filter_mentions, log_filtered
+
+    mentions, dropped = filter_mentions(mentions, normalized_text)
+    log_filtered(dropped)
+
+    if not mentions:
+        return []
+
+    mentions_json = json.dumps(mentions, indent=2)
+
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=4000,
+        temperature=0,
+        system=SYSTEM_PROMPT,
+        tools=[STRUCTURE_TOOL],
+        tool_choice={"type": "any"},
         messages=[
             {
                 "role": "user",
-                "content": f"Structure these mentions.\n\nOriginal transcript for context:\n{normalized_text}\n\nMentions:\n{mentions_json}"
+                "content": (
+                    f"Structure these mentions into health entities.\n\n"
+                    f"Original transcript for context:\n{normalized_text}\n\n"
+                    f"Mentions:\n{mentions_json}"
+                )
             }
         ]
     )
 
-    raw = response.content[0].text.strip()
+    # Extract tool_use block
+    tool_use_block = next(
+        (block for block in response.content if block.type == "tool_use"),
+        None
+    )
 
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-        raw = raw.strip()
-
-    if not raw:
-        print("⚠️ Claude boş yanıt döndürdü")
+    if not tool_use_block:
+        print("⚠️ structure_mentions: no tool_use block in response")
         return []
 
+    raw_input = tool_use_block.input
+
+    # Validate with Pydantic
     try:
-        parsed = json.loads(raw)
-        entities = parsed.get("entities", [])
-        return resolve_time_references(entities)
-    except json.JSONDecodeError as e:
-        print(f"⚠️ JSON parse hatası: {e}")
-        print(f"Ham yanıt: {raw[:500]}")
-        return []
+        output = EntityOutput.model_validate(raw_input)
+        entities = [e.model_dump() for e in output.entities]
+    except Exception as e:
+        print(f"⚠️ structure_mentions: Pydantic validation error: {e}")
+        # Fallback: return raw dicts if Pydantic validation fails
+        entities = raw_input.get("entities", [])
+
+    return _resolve_time_references(entities)
 
 
-def resolve_time_references(entities: list) -> list:
+def _resolve_time_references(entities: list) -> list:
     now = datetime.now().isoformat()
     for entity in entities:
         for key, value in entity.items():
