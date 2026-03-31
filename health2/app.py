@@ -74,28 +74,109 @@ CANDIDATE_TYPES = [
 ]
 
 # ─────────────────────────────────────────
-# STEP 1 — Upload & Transcribe
+# STEP 1 — Upload Audio or Paste Transcript
 # ─────────────────────────────────────────
 if st.session_state.step == "upload":
-    st.header("Step 1 — Upload Audio")
-    uploaded_file = st.file_uploader("Upload voice note", type=["m4a", "mp3", "wav", "ogg"])
+    st.header("Step 1 — Input")
 
-    if uploaded_file and st.button("Transcribe", type="primary"):
-        with st.spinner("Transcribing with Whisper..."):
-            temp_path = f"/tmp/{uploaded_file.name}"
-            with open(temp_path, "wb") as f:
-                f.write(uploaded_file.read())
-            raw = transcribe_audio(temp_path)
+    input_mode = st.radio(
+        "Input method",
+        ["🎙️ Audio file", "📋 JSON transcript"],
+        horizontal=True,
+        label_visibility="collapsed"
+    )
 
-        with st.spinner("Normalizing..."):
-            result = normalize_transcript(raw)
+    # ── Audio mode ────────────────────────────────────────────────────────
+    if input_mode == "🎙️ Audio file":
+        uploaded_file = st.file_uploader("Upload voice note", type=["m4a", "mp3", "wav", "ogg"])
 
-        st.session_state.transcript = raw
-        st.session_state.normalized = result["normalized_text"]
-        st.session_state.edited = result["normalized_text"]
-        st.session_state.low_confidence_segments = result["low_confidence_segments"]
-        st.session_state.step = "review_transcript"
-        st.rerun()
+        if uploaded_file and st.button("Transcribe", type="primary"):
+            with st.spinner("Transcribing with Whisper..."):
+                temp_path = f"/tmp/{uploaded_file.name}"
+                with open(temp_path, "wb") as f:
+                    f.write(uploaded_file.read())
+                raw = transcribe_audio(temp_path)
+
+            with st.spinner("Normalizing..."):
+                result = normalize_transcript(raw)
+
+            st.session_state.transcript = raw
+            st.session_state.normalized = result["normalized_text"]
+            st.session_state.edited = result["normalized_text"]
+            st.session_state.low_confidence_segments = result["low_confidence_segments"]
+            st.session_state.step = "review_transcript"
+            st.rerun()
+
+    # ── JSON transcript mode ──────────────────────────────────────────────
+    else:
+        st.caption('Upload a `.json` file containing a single `{"Content": "...", "Created_at": "..."}` object or an array of them.')
+
+        json_file = st.file_uploader("Upload JSON transcript", type=["json"], label_visibility="collapsed")
+
+        if json_file and st.button("Load Transcript", type="primary"):
+            try:
+                parsed = json.loads(json_file.read().decode("utf-8"))
+
+                # Normalise: accept single object or array
+                if isinstance(parsed, dict):
+                    entries = [parsed]
+                elif isinstance(parsed, list):
+                    entries = parsed
+                else:
+                    st.error("Expected a JSON object or array.")
+                    st.stop()
+
+                # Validate each entry has Content
+                if not all("Content" in e for e in entries):
+                    st.error('Each entry must have a "Content" field.')
+                    st.stop()
+
+                if len(entries) == 1:
+                    # Single transcript — go straight to normalize
+                    raw = entries[0]["Content"]
+                    created_at = entries[0].get("Created_at", "")
+
+                    with st.spinner("Normalizing..."):
+                        result = normalize_transcript(raw)
+
+                    st.session_state.transcript = raw
+                    st.session_state.normalized = result["normalized_text"]
+                    st.session_state.edited = result["normalized_text"]
+                    st.session_state.low_confidence_segments = result["low_confidence_segments"]
+                    st.session_state.json_created_at = created_at
+                    st.session_state.step = "review_transcript"
+                    st.rerun()
+
+                else:
+                    # Multiple transcripts — let user pick which one to process
+                    st.session_state._json_entries = entries
+                    st.rerun()
+
+            except json.JSONDecodeError as e:
+                st.error(f"JSON parse error: {e}")
+
+        # Multi-entry picker (shown after a multi-entry paste)
+        if hasattr(st.session_state, "_json_entries") and st.session_state._json_entries:
+            entries = st.session_state._json_entries
+            st.divider()
+            st.write(f"**{len(entries)} transcripts found — select one to process:**")
+
+            for i, entry in enumerate(entries):
+                preview = entry["Content"][:120].replace("\n", " ")
+                created = entry.get("Created_at", "")
+                label = f"**[{i+1}]** {created[:10]}  —  {preview}…"
+                if st.button(label, key=f"pick_entry_{i}"):
+                    raw = entry["Content"]
+                    with st.spinner("Normalizing..."):
+                        result = normalize_transcript(raw)
+                    st.session_state.transcript = raw
+                    st.session_state.normalized = result["normalized_text"]
+                    st.session_state.edited = result["normalized_text"]
+                    st.session_state.low_confidence_segments = result["low_confidence_segments"]
+                    st.session_state.json_created_at = entry.get("Created_at", "")
+                    st.session_state._json_entries = []
+                    st.session_state.step = "review_transcript"
+                    st.rerun()
 
 # ─────────────────────────────────────────
 # STEP 2 — Review Transcript

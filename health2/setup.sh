@@ -1,76 +1,67 @@
 #!/bin/bash
-# Health Voice System — Kurulum Scripti
-# Çalıştır: bash setup.sh
+# Health Voice System — Setup Script
+# Run: bash setup.sh
 
-set -e  # Hata olunca dur
+set -e
 
-echo "🔧 Health Voice System Kurulum"
+echo "🔧 Health Voice System Setup"
 echo "================================"
 
-# ─────────────────────────────────────
-# 1. Python kontrol
-# ─────────────────────────────────────
 echo ""
-echo "1. Python versiyonu kontrol ediliyor..."
-python3 --version || { echo "❌ Python3 bulunamadı"; exit 1; }
+echo "1. Checking Python version..."
+python3 --version || { echo "❌ Python3 not found"; exit 1; }
 
-# ─────────────────────────────────────
-# 2. Virtual environment
-# ─────────────────────────────────────
 echo ""
-echo "2. Virtual environment oluşturuluyor..."
+echo "2. Creating virtual environment..."
 python3 -m venv venv
 source venv/bin/activate
-echo "✅ venv aktif"
+echo "✅ venv active"
 
-# ─────────────────────────────────────
-# 3. Bağımlılıklar
-# ─────────────────────────────────────
 echo ""
-echo "3. Bağımlılıklar yükleniyor..."
+echo "3. Installing dependencies..."
 pip install --upgrade pip -q
 pip install -r requirements.txt -q
-echo "✅ Bağımlılıklar yüklendi"
+echo "✅ Dependencies installed"
 
-# ─────────────────────────────────────
-# 4. .env kontrol
-# ─────────────────────────────────────
 echo ""
-echo "4. .env dosyası kontrol ediliyor..."
+echo "4. Checking .env file..."
 if [ ! -f ".env" ]; then
-    echo "⚠️  .env bulunamadı — .env.example kopyalanıyor"
+    echo "⚠️  .env not found — copying .env.example"
     cp .env.example .env
-    echo "❗ .env dosyasını düzenle ve API key'lerini gir"
+    echo "❗ Edit .env and fill in your API keys before continuing"
 else
-    echo "✅ .env mevcut"
+    echo "✅ .env found"
 fi
-
-# ─────────────────────────────────────
-# 5. DB schema
-# ─────────────────────────────────────
-echo ""
-echo "5. Veritabanı schema oluşturuluyor..."
-echo "   DB bilgilerini .env'den okuyorum..."
 
 source .env 2>/dev/null || true
 
+echo ""
+echo "5. Creating database schema..."
 if [ -z "$DB_NAME" ]; then
-    echo "⚠️  .env'de DB bilgisi yok — schema kurulumunu atla"
-    echo "   Sonra manuel çalıştır: psql -U \$DB_USER -d \$DB_NAME -f schema.sql"
+    echo "⚠️  No DB info in .env — skipping"
+    echo "   Run manually: psql -U \$DB_USER -d \$DB_NAME -f schema.sql"
 else
     PGPASSWORD=$DB_PASSWORD psql -U $DB_USER -h $DB_HOST -p $DB_PORT -d $DB_NAME -f schema.sql && \
-        echo "✅ Schema oluşturuldu" || \
-        echo "⚠️  Schema zaten mevcut veya bağlantı hatası"
+        echo "✅ Schema created" || \
+        echo "⚠️  Schema already exists or connection error"
 fi
 
-# ─────────────────────────────────────
-# Tamamlandı
-# ─────────────────────────────────────
+echo ""
+echo "6. Loading knowledge base and corrections..."
+if [ -z "$DB_NAME" ]; then
+    echo "⚠️  No DB info in .env — skipping"
+    echo "   Run manually: psql -U \$DB_USER -d \$DB_NAME -f seed_data.sql"
+else
+    PGPASSWORD=$DB_PASSWORD psql -U $DB_USER -h $DB_HOST -p $DB_PORT -d $DB_NAME -f seed_data.sql && \
+        echo "✅ Seed data loaded" || \
+        echo "⚠️  Seed data load failed or already loaded"
+fi
+
 echo ""
 echo "================================"
-echo "✅ Kurulum tamamlandı!"
+echo "✅ Setup complete!"
 echo ""
-echo "Başlatmak için:"
+echo "To start:"
 echo "  source venv/bin/activate"
 echo "  streamlit run app.py"
 echo ""
