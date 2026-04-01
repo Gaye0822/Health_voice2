@@ -19,6 +19,13 @@ SAME_SESSION_SIGNALS = [
     # Recent past — user reporting something from last night or recent days
     "last night", "last few nights", "last three nights", "last two nights",
     "past few days", "past few nights", "yesterday",
+    # Ongoing symptoms confirmed as still present in this session
+    "still have", "still keep", "still get", "still feeling", "still experiencing",
+    "keep waking", "keep getting", "keeps happening", "still going on",
+    "still messed up", "still broken", "still awful", "still terrible",
+    # Recent repeated actions confirmed as current practice
+    "a couple times now", "a few times now", "couple of times now",
+    "been taking", "have been taking", "have taken",
 ]
 
 # temporal_evidence values that should always be dropped

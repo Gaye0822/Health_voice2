@@ -46,6 +46,7 @@ class Mention(BaseModel):
     confidence: Literal["high", "low"]
     context: str
     temporal_evidence: TemporalEvidence
+    reasoning: str  # chain of thought — why this was extracted and classified this way
 
 class MentionOutput(BaseModel):
     mentions: List[Mention]
@@ -112,20 +113,23 @@ class DeviceEntity(BaseModel):
 class MeasurementEntity(BaseModel):
     type: Literal["measurement"]
     metric: str
-    value: float  # must be numeric — null not allowed
+    value: Optional[float] = None  # null if no numeric value stated — use notes for directional observations
     unit: Optional[str] = None
     time: Optional[str] = None
     source: Optional[str] = None
+    notes: Optional[str] = None   # e.g. "down after 2 AM", "elevated", "in the cellar"
 
     @field_validator("value", mode="before")
     @classmethod
-    def value_must_be_numeric(cls, v):
+    def value_must_be_numeric_or_none(cls, v):
         if v is None:
-            raise ValueError("measurement value cannot be null — omit the entity if no numeric value exists")
+            return None
+        if isinstance(v, bool):
+            raise ValueError("measurement value cannot be boolean")
         try:
             return float(v)
         except (TypeError, ValueError):
-            raise ValueError(f"measurement value must be a number, got: {v!r}")
+            raise ValueError(f"measurement value must be a number or null, got: {v!r}")
 
 
 class MealEntity(BaseModel):
@@ -133,7 +137,7 @@ class MealEntity(BaseModel):
     label: str
     time: Optional[str] = None
     eaten_out: Optional[bool] = None
-    items: Optional[Union[List[str], str]] = None
+    restaurant: Optional[str] = None  # only if eaten_out is True and restaurant name is mentioned
 
 
 class InterventionEntity(BaseModel):

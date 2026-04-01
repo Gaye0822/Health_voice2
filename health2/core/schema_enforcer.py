@@ -26,8 +26,8 @@ SCHEMA_FIELDS = {
     "activity":     {"type", "label", "start_time", "duration", "status", "notes"},
     "machine":      {"type", "label", "start_time", "duration", "status", "notes"},
     "device":       {"type", "label", "start_time", "status"},
-    "measurement":  {"type", "metric", "value", "unit", "time", "source"},
-    "meal":         {"type", "label", "time", "eaten_out", "items"},
+    "measurement":  {"type", "metric", "value", "unit", "time", "source", "notes"},
+    "meal":         {"type", "label", "time", "eaten_out", "restaurant"},
     "intervention": {"type", "label", "start_date", "end_date", "status", "notes"},
     "outcome":      {"type", "linked_to", "onset_time", "qualifier", "direction"},
     "test":         {"type", "label", "time", "status", "result", "notes"},
@@ -174,6 +174,7 @@ def fix_measurement_value(entity: dict) -> dict:
     - If unit is 'hours' and value looks like a duration string → convert correctly
     - If value is a string number → coerce to float
     - If value cannot be converted → mark for removal
+    - value=null is now valid — directional observations live in notes field
     """
     if entity.get("type") != "measurement":
         return entity
@@ -182,9 +183,8 @@ def fix_measurement_value(entity: dict) -> dict:
     value = result.get("value")
     unit = result.get("unit", "") or ""
 
+    # null is valid — directional observation without numeric value
     if value is None:
-        result["_remove"] = True
-        result["_remove_reason"] = "measurement value is null"
         return result
 
     if isinstance(value, str):

@@ -71,11 +71,81 @@ intake
   Extract even if NOT taken — the action is decided later.
   Do not extract if the substance was only recommended, discussed, or planned.
 
+  HEALTH INTENT RULE: A substance qualifies as intake only if the user is
+  consuming it as a deliberate health decision — a supplement, medication,
+  or something chosen specifically for a health effect.
+  Everyday food and drink consumed as part of a normal meal or habit do NOT
+  qualify as intake, even if mentioned by name.
+  Ask: is the user tracking this as a health variable?
+  - Supplements, medications, OTC drugs → always intake
+  - Caffeine → intake if user is tracking dose or mentions it deliberately
+  - Matcha, Hojicha, green tea → intake if consumed with health intent
+  - Peppermint tea → intake if user tracks it (e.g. avoids it late for sleep reasons)
+  - Mocha, latte, oat milk latte, regular coffee → NOT intake, omit or meal
+  - Water, juice, regular food → NOT intake, omit or meal
+  The distinction: is this something the user would want in their health record,
+  or just something they happened to drink?
+
+  LABEL RULE: The substance must be specifically named.
+  Before extracting any intake, apply this test:
+  "Does this label refer to a single specific substance that can be named,
+  tracked, and compared over time?"
+  If yes → extract.
+  If no → omit entirely.
+
+  A label fails this test when it describes a collection of unnamed substances,
+  regardless of how the user refers to it. Words like "stack", "kit", "pack",
+  "bundle", "vitamins", "supplements" combined with a time or purpose descriptor
+  are almost always group labels and must be omitted:
+  - "bedtime stack", "sleep kit", "morning stack", "wake up stack" → omit
+  - "lunch supplements", "evening vitamins", "night pack" → omit
+  - "usual supplements", "the stack", "my vitamins" → omit
+  This rule applies even when:
+  - The user says "took the bedtime stack" (action is clear but label is not resolvable)
+  - The user treats it as a defined concept with "the" or "my"
+  - The user says they did not take it (did_not_take does not override the label rule)
+
+  Medication category names without a specific drug name also fail this test:
+  - "antibiotic" → omit (which antibiotic? not trackable)
+  - "painkiller" → omit (which one?)
+  - "medication" → omit
+  Exception: if the label appears in the knowledge base registry as a canonical
+  defined term with known contents, it may be extracted.
+
 symptom
   A clinically named, observable body state that a clinician could write in a chart
   as a finding. Must be specific enough to be tracked and compared over time.
   Ask: could a doctor document this as a clinical finding? If yes → symptom.
   If it is how the user feels in general → omit.
+
+  ABSENCE RULE: If the user reports that a symptom did NOT occur, was absent,
+  or did not happen — omit entirely. Do not extract the symptom with a qualifier
+  like "absent" or "no occurrence". The absence of a symptom is not a symptom.
+  Examples that must be omitted:
+  - "no nocturia last night" → omit
+  - "did not have nocturia" → omit
+  - "nocturia absent for first time in four months" → omit
+  - "no headache today" → omit
+  If the absence is notable, it may appear in a theory if the user speculates
+  about why it did not occur.
+
+  CONTEXT-DEPENDENCY TEST — apply this before extracting any symptom:
+  Ask: would this finding exist on any other day, in any other context, without the
+  specific activity or situation the user just described?
+  If yes → symptom (it stands on its own, it is a real body state).
+  If no → it is an expected after-effect of an activity, not a symptom. Put it in
+  the activity's notes if notable, or omit entirely.
+
+  Examples of this test:
+  - Shivering all night from a cold room → would shivering occur without the cold room?
+    Yes — shivering is a body response that can occur independently → symptom ✅
+  - Feeling cold for 2 hours after a cold plunge → would this occur without the cold plunge?
+    No — this is a direct, expected physiological after-effect → NOT a symptom, activity notes ❌
+  - Headache in the morning → would a headache occur without any specific trigger?
+    Yes — headache is an independent clinical finding → symptom ✅
+  - Gas and bloating after a fatty meal → would this occur without the meal?
+    Gas itself is a clinical finding that can occur independently → symptom ✅
+    (The meal is the suspected cause, not the defining context)
 
   These do NOT qualify:
   - General feelings: "feeling unwell", "feel awful", "feel terrible", "feel garbage"
@@ -85,11 +155,22 @@ symptom
     Only device-recorded sleep metrics (HRV, sleep duration, deep sleep) are extracted, as measurements.
   - Vague discomfort: "flu-adjacent feeling", "under the weather", "a bit off"
   - Anything the user explicitly dismisses: "probably nothing", "just a bit off"
+  - Expected after-effects of activities: cold sensation after cold plunge, muscle burn during exercise
 
   These DO qualify:
   - Named conditions: sinusitis, nausea, headache, sore throat, chest tightness
-  - Localized specific findings: right knee tenderness, muscle fasciculation
-  - Observable body responses: flushing, rash, fever, dizziness
+  - Localized specific findings actively reported as current complaints: right knee tenderness, muscle fasciculation
+  - Observable body responses: flushing, rash, fever, dizziness, shivering (when not activity-induced)
+  - Recurring overnight findings: shivering from cold room, nocturia
+
+  Wounds, cuts, and injuries — apply this test:
+  Is the user actively reporting this as a current clinical complaint?
+  Or are they mentioning it in passing, describing care being done to it, or referencing it as background?
+  - "My knee is really painful right now" → symptom ✅
+  - "Cut on my foot is still messed up" mentioned while describing something else → context ❌
+  - "Someone came and put gauze on my toe" → outside (someone else's action) ❌
+  The difference is whether the user is flagging it as a problem they want tracked,
+  or simply acknowledging it exists as background information.
 
 activity
   A physical session the user performed — exercise, breathwork, meditation,
@@ -110,16 +191,24 @@ device
   AND it is not merely the source of a measurement already being extracted.
 
 measurement
-  A body-level metric with a specific numeric value, recorded from a device or test.
+  A body-level metric recorded from a device or test.
   HRV, weight, blood glucose, blood pressure, SpO2, sleep duration from a tracker,
   and similar objective measurements qualify.
   Subjective scores, exercise performance metrics, and dietary estimates do not.
 
+  Extract as measurement if:
+  - A specific numeric value is stated → value field will be filled
+  - Only a directional observation is stated ("HRV is down", "heart rate elevated after 2 AM")
+    → still extract as measurement, value will be null, observation goes in notes
+
+  Do NOT invent a value of 0 when no number is stated.
+  Do NOT skip the measurement entirely just because no number was given —
+  the directional observation is still worth preserving.
+
 meal
   An eating event. Capture timing and whether it was eaten out.
-  If a restaurant name is mentioned, capture it.
-  Do NOT extract ingredient lists, gram-level detail, or full meal content —
-  that belongs in a separate food system.
+  If eaten out and a restaurant name is mentioned, capture it.
+  Do NOT extract ingredient lists, gram-level detail, or food content of any kind.
 
 theory
   The user's own speculation, causal explanation, or personal interpretation.
@@ -142,9 +231,16 @@ For every mention, assign one of:
 
 explicit_today   — clearly happened today or in this session
                    "took", "did", "just", "this morning", specific clock times
+                   IMPORTANT: "explicit_today" means THIS recording session only.
+                   "Last night", "the past few nights", "on Tuesday", "last week"
+                   are NOT explicit_today — they are past events.
+                   Only use explicit_today if the action happened today or
+                   is currently happening right now.
 
 active_regimen   — ongoing habit with no today confirmation
-                   "I take", "I've been on", "I usually"
+                   "I take", "I've been on", "I usually", "every night"
+                   Use this when the user describes a pattern without confirming
+                   today's specific instance.
 
 future_plan      — intended but not yet done
                    "going to", "will", "about to", "planning to"
@@ -153,6 +249,43 @@ consultation_relay — reporting what a provider said or recommended
                    "he said", "she wants me to", "my doctor suggested"
 
 unclear          — not enough context to determine
+
+IMPORTANT: Temporal evidence must be assessed from the mention's own sentence
+and immediate context only. It cannot be inherited from a nearby mention.
+"The cold plunge and the meditation" — if only cold plunge has "I did", meditation
+must be assessed independently. If no signal exists for meditation → unclear.
+
+Past events reported in today's note:
+"I took paracetamol the first two nights" → these are past completed facts,
+not today's events. Use explicit_today only if it happened today.
+If the past event is specific and factual, it can still be extracted —
+but temporal_evidence should reflect when it actually happened, not when it was reported.
+
+─────────────────────────────────────────
+REASONING FIELD — REQUIRED FOR EVERY MENTION
+─────────────────────────────────────────
+
+For every mention you extract, you must fill the reasoning field.
+This is your chain of thought — write it before finalising the candidate_type.
+
+For each mention, answer these questions in the reasoning field:
+1. Did this actually happen, or is it a plan, recommendation, or reference?
+2. Is this about the user's own body or actions?
+3. Is the label specific and resolvable enough to track over time?
+4. For symptoms: is the user currently experiencing this, or referencing/dismissing it?
+   Did the user explicitly say it is "probably nothing", "not really", "not necessarily"?
+   Is this an expected after-effect of an activity rather than an independent finding?
+5. For intake: is the substance specifically named, or is it a vague group label?
+6. What is the temporal evidence, assessed from this mention's own context only?
+
+Example reasoning for a symptom that should be omitted:
+"User says 'a little bit sniffly but doesn't feel like sick necessarily, just the air
+is super dry' — user explicitly dismisses this as environmental, not a clinical finding.
+Omitting."
+
+Example reasoning for a symptom that should be kept:
+"User says 'had a mini hot flash in the middle of the night' — specific, named,
+clinically recognisable finding. User does not dismiss it. Keeping as symptom."
 
 ─────────────────────────────────────────
 EXAMPLES
@@ -227,7 +360,121 @@ Thinking:
 - activityA at 6am → happened? yes. specific? yes → activity, explicit_today
 
 Result mentions:
-[prodromal symptom (symptom), predictive pattern (theory), activityA (activity)]"""
+[prodromal symptom (symptom), predictive pattern (theory), activityA (activity)]
+
+---
+
+EXAMPLE 4 — symptom vs activity after-effect vs recurring overnight finding
+Transcript:
+"Did a cold plunge around 2:45pm, left me really cold for the next couple hours.
+Spent most of the night shivering — I don't understand why, room temperature is
+usually the same as Tokyo. Did not sleep well, kept waking up cold.
+Also had a splitting headache this morning and elevated heart rate.
+Gas all night, still worse in the morning."
+
+Thinking:
+- cold plunge → happened? yes → activity, explicit_today
+- "really cold for next couple hours" → context-dependency test: would cold sensation
+  occur without the cold plunge? No — direct expected after-effect → NOT a symptom.
+  Put in activity notes if notable.
+- "shivering most of the night" → context-dependency test: would shivering occur
+  without a specific activity? Yes — shivering is a body response that stands on its own.
+  Is it recurring and sleep-disrupting? Yes → symptom, explicit_today
+- "did not sleep well, kept waking up cold" → sleep difficulty, never a symptom → omit
+- "splitting headache this morning" → named, specific, independent clinical finding → symptom
+- "elevated heart rate" → observable body state, clinically documentable → symptom
+- "gas all night, still worse in the morning" → specific, clinically named,
+  independent of any activity → symptom
+
+Result mentions:
+[cold plunge (activity), shivering (symptom), headache (symptom),
+elevated heart rate (symptom), gas (symptom)]
+
+---
+
+EXAMPLE 4 — symptom vs activity after-effect vs recurring overnight finding
+Transcript:
+"Did a cold plunge around 2:45pm, left me really cold for the next couple hours.
+Spent most of the night shivering — I don't understand why, room temperature is
+usually the same as Tokyo. Did not sleep well, kept waking up cold.
+Also had a splitting headache this morning and elevated heart rate.
+Gas all night, still worse in the morning."
+
+Thinking:
+- cold plunge → happened? yes → activity, explicit_today
+- "really cold for next couple hours" → context-dependency test: would cold sensation
+  occur without the cold plunge? No — direct expected after-effect → NOT a symptom.
+  Put in activity notes if notable.
+  reasoning: "Expected physiological after-effect of cold plunge. Context-dependent. Omitting."
+- "shivering most of the night" → context-dependency test: would shivering occur
+  without a specific activity? Yes — shivering is a body response that stands on its own.
+  Is it recurring and sleep-disrupting? Yes → symptom, explicit_today
+  reasoning: "Overnight shivering from cold room. Independent of any activity. Clinically trackable. Keeping."
+- "did not sleep well, kept waking up cold" → sleep difficulty, never a symptom → omit
+  reasoning: "Sleep difficulty observation. Never a symptom in this system. Omitting."
+- "splitting headache this morning" → named, specific, independent clinical finding → symptom
+  reasoning: "Named condition. Clinically documentable. Not dismissed. Keeping."
+- "elevated heart rate" → observable body state, clinically documentable → symptom
+  reasoning: "Observable clinical finding. Not dismissed. Keeping."
+- "gas all night, still worse in the morning" → specific, clinically named,
+  independent of any activity → symptom
+  reasoning: "Named clinical finding, ongoing. Not dismissed. Keeping."
+
+Result mentions:
+[cold plunge (activity), shivering (symptom), headache (symptom),
+elevated heart rate (symptom), gas (symptom)]
+
+---
+
+EXAMPLE 5 — symptom dismissal and absence rule
+Transcript:
+"Woke up feeling really tired. A little bit sniffly but again doesn't feel like sick
+necessarily, just the air is super dry. Had a mini hot flash in the middle of the night.
+Was trying to work on some sore muscles with the massage. No nocturia last night."
+
+Thinking:
+- "really tired" → general energy state, not a clinical finding → omit
+  reasoning: "General fatigue/energy state. Not clinically nameable. Omitting."
+- "a little bit sniffly but doesn't feel like sick necessarily, just the air is super dry"
+  → user explicitly dismisses this as environmental, not a clinical symptom → omit
+  reasoning: "User says 'doesn't feel like sick necessarily, just the dry air'. Explicitly dismissed. Omitting."
+- "mini hot flash in the middle of the night" → specific, named, clinically recognisable,
+  not dismissed → symptom, explicit_today
+  reasoning: "Named clinical finding. Specific timing. User does not dismiss it. Keeping."
+- "sore muscles" → this is the reason for the massage, not a currently reported symptom.
+  User is referencing a pre-existing state as context for an action → omit
+  reasoning: "Mentioned as reason for massage, not as a current active complaint. Not a direct symptom report. Omitting."
+- "no nocturia last night" → absence of a symptom is not a symptom → omit
+  reasoning: "Absence statement. The non-occurrence of nocturia is not a symptom entity. Omitting."
+
+Result mentions:
+[hot flash (symptom)]
+
+---
+
+EXAMPLE 6 — vague group labels, specific vs unresolvable intake
+Transcript:
+"Did not take the lunch supplements today. All other supplements were taken.
+Oh actually no HMB today — I took the morning one but definitely did not get
+the dinner one. Late lunch around 2:30pm, late dinner that didn't end until 8:30pm."
+
+Thinking:
+- "lunch supplements" → intake? Label test: can this be named specifically?
+  No — "lunch supplements" is a group label with no resolvable substance name.
+  Even though the user explicitly says did_not_take → omit entirely.
+- "all other supplements were taken" → intake? No specific name → omit entirely.
+  Cannot create an entity without knowing what substance it refers to.
+- HMB morning → specific named substance, took → intake, explicit_today
+- HMB dinner → specific named substance, did_not_take → intake, explicit_today
+- lunch → meal, explicit_today
+- dinner → meal, explicit_today
+
+Result mentions:
+[HMB morning (intake), HMB dinner (intake), lunch (meal), dinner (meal)]
+
+Key rule: a vague group label is never acceptable as an intake label,
+even when action is did_not_take and even when the user clearly means something real.
+If the substance cannot be named, the entity cannot be tracked — omit it."""
 
 
 def extract_mentions(normalized_text: str) -> list:

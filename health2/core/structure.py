@@ -69,6 +69,12 @@ For each mention, work through these questions before writing the entity:
    "I caught rhinovirus from X" or "I have the rhinovirus" → context, not symptom.
    The pathogen name is background information. The actual symptoms are what get extracted.
 
+   ABSENCE RULE: If the user reports that a symptom did NOT occur, omit it entirely.
+   Do not create a symptom entity with qualifier "absent" or similar.
+   "No nocturia", "did not have nocturia", "nocturia absent" → omit.
+   The absence of a symptom is not a symptom.
+   If the user speculates about why it did not occur → theory.
+
    The symptom bar is clinical: a symptom must be something a clinician could write
    in a chart as a finding. If it is how the user feels in general, omit it.
    General feelings ("feeling unwell", "feel awful", "feel terrible", "feel garbage",
@@ -80,6 +86,19 @@ For each mention, work through these questions before writing the entity:
    "Hard time sleeping", "trouble falling asleep", "woke up early", "tough sleep", and
    even clinical-sounding labels like insomnia derived from user self-report are all omitted.
    Only device-recorded sleep metrics are extracted, as measurements.
+
+   CONTEXT-DEPENDENCY TEST — apply before structuring any symptom:
+   Ask: would this finding exist on any other day, without the specific activity or
+   situation the user just described?
+   If yes → structure as symptom.
+   If no → it is an expected after-effect of an activity. Put it in the activity's
+   notes field if notable. Do NOT create a symptom entity.
+
+   Cold plunge after-effects specifically: cold sensation, feeling cold for hours
+   after a plunge — these are expected physiological responses, NOT symptoms.
+   Put them in the cold plunge activity's notes if the user mentions them.
+   Shivering from a cold room overnight is different — it is recurring, sleep-disrupting,
+   and context-independent. Structure it as a symptom.
 
    For activities: if a movement or exercise is described as something done inside or
    as part of a machine session, do not create a separate activity entity for it.
@@ -116,16 +135,46 @@ DURATION:
 
 MERGE RULE:
 - Same entity mentioned twice → one record
-- Related symptoms describing the same condition → merge with combined qualifier
+- Multiple symptoms describing the same anatomical location and condition → merge into one entity
+  Use the most specific label. Put additional detail in qualifier field.
+  Do NOT create separate entities for different aspects of the same finding.
+
+  Examples of what MUST be merged:
+  - "left knee swelling" + "left knee pain" + "left knee functional limitation" (cannot bend)
+    → ONE entity: label "left knee swelling and pain", qualifier "completely swollen especially
+    in back, fluid accumulation, cannot bend knee"
+  - "hand numbness" + "hands getting cold during running"
+    → ONE entity: label "hand numbness", qualifier "frozen, no feeling, painful; also cold during outdoor running"
+  - Two headache entries for today and yesterday
+    → ONE entity: label "headache", qualifier "massive, also present yesterday"
+  - "right hip to knee pain" + "swelling" + "hip grinding" (all in same hip area)
+    → ONE entity: label "right hip pain", qualifier "grinding, swelling, mechanical"
+
+  The test: if two symptoms share the same body part and are part of the same
+  ongoing clinical picture → merge. If they are genuinely separate conditions
+  in different body parts → keep separate.
+
+MEASUREMENT VALUE RULE:
+- If a specific number is stated → fill value field with that number
+- If no number is stated but a directional observation exists ("HRV is down",
+  "heart rate elevated after 2 AM", "HRV has been better") → set value to null,
+  write the observation into the notes field
+- NEVER use 0 as a substitute for "no value stated" — 0 means the metric was actually zero
+- NEVER omit a measurement just because no number exists — preserve it with value: null
 
 LABEL RULE:
 - Specific named entity only
 - Vague or unresolvable label → omit entirely
+- For intake specifically: the substance must be named precisely enough to be
+  tracked and compared over time. Group labels are never acceptable:
+  "lunch supplements", "wake up stack", "morning vitamins", "usual supplements",
+  "night stack" → omit entirely, even if action is did_not_take
+  Exception: if the label is a registered canonical term in the knowledge base
 
 MEAL RULE:
-- Capture: label, time, eaten_out (true/false), restaurant name if mentioned
-- Do NOT populate items with ingredient lists, gram-level breakdown, or full meal content
-- If eaten_out is true and a restaurant name is mentioned → put it in notes
+- Capture: label, time, eaten_out (true/false)
+- If eaten_out is true and a restaurant name is mentioned → put it in restaurant field
+- Do NOT capture items, ingredients, or food content of any kind
 - Detailed food content belongs in a downstream food system, not here
 
 ─────────────────────────────────────────
