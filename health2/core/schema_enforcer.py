@@ -22,12 +22,12 @@ from typing import Optional
 
 SCHEMA_FIELDS = {
     "intake":       {"type", "label", "action", "dose", "unit", "time", "category", "notes"},
-    "symptom":      {"type", "label", "onset_time", "severity", "qualifier", "duration"},
+    "symptom":      {"type", "label", "status", "onset_time", "severity", "qualifier", "duration", "interval", "source", "notes"},
     "activity":     {"type", "label", "start_time", "duration", "status", "notes"},
     "machine":      {"type", "label", "start_time", "duration", "status", "notes"},
     "device":       {"type", "label", "start_time", "status"},
     "measurement":  {"type", "metric", "value", "unit", "time", "source", "notes"},
-    "meal":         {"type", "label", "time", "eaten_out", "restaurant"},
+    "meal":         {"type", "label", "time", "eaten_out", "restaurant", "description"},
     "intervention": {"type", "label", "start_date", "end_date", "status", "notes"},
     "outcome":      {"type", "linked_to", "onset_time", "qualifier", "direction"},
     "test":         {"type", "label", "time", "status", "result", "notes"},
@@ -174,7 +174,6 @@ def fix_measurement_value(entity: dict) -> dict:
     - If unit is 'hours' and value looks like a duration string → convert correctly
     - If value is a string number → coerce to float
     - If value cannot be converted → mark for removal
-    - value=null is now valid — directional observations live in notes field
     """
     if entity.get("type") != "measurement":
         return entity
@@ -183,8 +182,8 @@ def fix_measurement_value(entity: dict) -> dict:
     value = result.get("value")
     unit = result.get("unit", "") or ""
 
-    # null is valid — directional observation without numeric value
     if value is None:
+        # null value is valid — directional observation captured in notes
         return result
 
     if isinstance(value, str):

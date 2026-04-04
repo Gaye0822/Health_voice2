@@ -35,6 +35,7 @@ CandidateType = Literal[
     "device",
     "measurement",
     "meal",
+    "outcome",
     "theory",
     "outside",
     "other"
@@ -76,13 +77,19 @@ class IntakeEntity(BaseModel):
     notes: Optional[str] = None
 
 
+SymptomStatus = Literal["present", "absent"]
+
 class SymptomEntity(BaseModel):
     type: Literal["symptom"]
     label: str
+    status: SymptomStatus = "present"
     onset_time: Optional[str] = None
     severity: Optional[str] = None
     qualifier: Optional[str] = None
     duration: Optional[str] = None
+    interval: Optional[str] = None
+    source: Optional[str] = None
+    notes: Optional[str] = None
 
 
 class ActivityEntity(BaseModel):
@@ -138,6 +145,7 @@ class MealEntity(BaseModel):
     time: Optional[str] = None
     eaten_out: Optional[bool] = None
     restaurant: Optional[str] = None  # only if eaten_out is True and restaurant name is mentioned
+    description: Optional[str] = None  # free-text handoff for downstream food system — preserve as spoken
 
 
 class InterventionEntity(BaseModel):
@@ -247,7 +255,8 @@ ENTITY_SCHEMAS = {
         "categories": ["supplement", "prescription", "OTC", "food"]
     },
     "symptom": {
-        "fields": ["label", "onset_time", "severity", "qualifier", "duration"]
+        "fields": ["label", "status", "onset_time", "severity", "qualifier", "duration", "interval", "source", "notes"],
+        "statuses": ["present", "absent"]
     },
     "activity": {
         "fields": ["label", "start_time", "duration", "status", "notes"],
@@ -266,7 +275,7 @@ ENTITY_SCHEMAS = {
         "note": "Numeric values only."
     },
     "meal": {
-        "fields": ["label", "time", "eaten_out", "items"]
+        "fields": ["label", "time", "eaten_out", "restaurant", "description"]
     },
     "intervention": {
         "fields": ["label", "start_date", "end_date", "status", "notes"],

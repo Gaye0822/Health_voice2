@@ -42,8 +42,20 @@ HOW TO STRUCTURE EACH MENTION
 For each mention, work through these questions before writing the entity:
 
 1. WHAT TYPE IS THIS?
-   Use the candidate_type from the mention unless it clearly violates the schema.
-   Do not override a user-confirmed type based on your own judgment.
+   Use the candidate_type from the mention — this is an ABSOLUTE rule.
+   NEVER change a mention's candidate_type to a different entity type.
+   Do not override based on transcript context, related entities, or your own judgment.
+
+   If a mention came in as "intake" → it must leave as "intake".
+   If a mention came in as "symptom" → it must leave as "symptom".
+   If a mention came in as "outcome" → it must leave as "outcome".
+
+   The relationship between entities (e.g. paracetamol reducing nocturia) may already
+   be captured as a separate outcome or theory entity in the same mention list.
+   Do not merge them — structure each mention independently using its own candidate_type.
+
+   The ONLY exception: if the candidate_type is "other" → use your judgment to
+   determine the best fitting schema, or omit if not structurable.
 
 2. WHAT ACTUALLY HAPPENED?
    Use the temporal_evidence field:
@@ -69,11 +81,26 @@ For each mention, work through these questions before writing the entity:
    "I caught rhinovirus from X" or "I have the rhinovirus" → context, not symptom.
    The pathogen name is background information. The actual symptoms are what get extracted.
 
-   ABSENCE RULE: If the user reports that a symptom did NOT occur, omit it entirely.
-   Do not create a symptom entity with qualifier "absent" or similar.
-   "No nocturia", "did not have nocturia", "nocturia absent" → omit.
-   The absence of a symptom is not a symptom.
-   If the user speculates about why it did not occur → theory.
+   ABSENCE RULE — THREE STATES:
+   Symptoms have three possible states. Only two are ever captured:
+
+   explicit present → status: "present" (default, omit the field if present)
+     User says it occurred: "had nocturia last night", "woke up with hot flash"
+
+   explicit absent → status: "absent"
+     User explicitly negates a recurring tracked phenomenon:
+     "no nocturia last night", "did not have nocturia", "nocturia absent"
+     Only apply to recurring tracked phenomena — things the user monitors over time.
+     Do NOT apply to incidental symptoms: "no headache today" → omit entirely.
+
+   not mentioned → do not create an entity (silence = unknown, not absent)
+
+   RETROSPECTIVE ABSENCE INTERVAL:
+   If the user says "I haven't had nocturia for 5-6 days" or similar:
+   → status: "absent", interval: "5-6 days", source: "retrospective summary"
+   Do not expand this into fake day-by-day records. One entity captures the interval as stated.
+
+   If the user speculates about why something did not occur → also create a theory entity.
 
    The symptom bar is clinical: a symptom must be something a clinician could write
    in a chart as a finding. If it is how the user feels in general, omit it.
@@ -118,6 +145,40 @@ NULL RULE:
 - null for any unknown or missing value
 - NEVER the string "unknown"
 
+SYMPTOM STATUS RULE:
+- status defaults to "present" — omit the field for normal present symptoms
+- status: "absent" only when user explicitly negates a recurring tracked phenomenon
+- interval: fill only for retrospective absence ("5-6 days", "about a week") — preserve as stated, do not expand
+- source: "retrospective summary" only when interval is filled from a retrospective statement
+- Never set status: "absent" for incidental symptoms ("no headache today" → omit entirely)
+
+OUTCOME ENTITY RULE:
+An outcome captures an observed directional change in a health variable, linked to something.
+The outcome entity uses these fields ONLY: linked_to, onset_time, qualifier, direction.
+NEVER use label, action, dose, unit, category, or any intake field in an outcome entity.
+
+The substance or activity that caused the outcome is NOT part of the outcome entity.
+It has its own separate entity (intake, activity, etc.).
+
+"paracetamol 500mg first night" → intake entity (label: paracetamol, action: took, dose: 500)
+"paracetamol reduces nocturia by 50%" → outcome entity (linked_to: paracetamol, direction: positive)
+These are TWO separate entities. Never combine them into one.
+
+If a mention came in as intake → structure it as intake, full stop.
+The fact that it is related to an outcome does not change what it is.
+
+QUALIFIER FIELD — STRICT RULE:
+- Only fill if the user explicitly used descriptive language about this specific symptom
+- NEVER invent or infer a qualifier — if no descriptive word exists in the transcript → null
+- Do not use generic words like "present", "reported", "noted", "observed" as qualifiers
+- Examples:
+  "stools OK" → qualifier: null, notes: "reported as OK"
+  "terrible gas" → qualifier: "terrible"
+  "headache, massive" → qualifier: "massive"
+  "tingling in hands" (no descriptor) → qualifier: null
+- If the user's only description is a positive/neutral status word (OK, fine, normal, better)
+  → qualifier: null, put it in notes instead: notes: "reported as OK / fine / normal"
+
 DOSE FIELD:
 - Only fill if a single unambiguous numeric value is explicitly stated
 - Ranges, approximations, or vague quantities ("two or three", "a few", "some", "a couple") → null
@@ -134,10 +195,20 @@ DURATION:
   Do not convert to decimal
 
 MERGE RULE:
-- Same entity mentioned twice → one record
+- Same entity mentioned twice WITH THE SAME TYPE → one record
+- NEVER merge mentions of different candidate_types, even if they share a common word.
+  "paracetamol 500 mg first night" (intake) and "paracetamol reduces nocturia" (outcome)
+  share the word "paracetamol" but are fundamentally different records — never merge.
+  Different types = always separate entities, no exceptions.
 - Multiple symptoms describing the same anatomical location and condition → merge into one entity
   Use the most specific label. Put additional detail in qualifier field.
   Do NOT create separate entities for different aspects of the same finding.
+
+  NEVER merge mentions of different candidate_types even if they share the same label.
+  "paracetamol" as intake + "paracetamol reduces nocturia" as outcome → TWO separate entities.
+  An intake and an outcome about the same substance are fundamentally different records.
+  Same rule applies to any type combination: intake+theory, symptom+outcome, etc.
+  Different types = different entities, always.
 
   Examples of what MUST be merged:
   - "left knee swelling" + "left knee pain" + "left knee functional limitation" (cannot bend)
@@ -150,9 +221,8 @@ MERGE RULE:
   - "right hip to knee pain" + "swelling" + "hip grinding" (all in same hip area)
     → ONE entity: label "right hip pain", qualifier "grinding, swelling, mechanical"
 
-  The test: if two symptoms share the same body part and are part of the same
-  ongoing clinical picture → merge. If they are genuinely separate conditions
-  in different body parts → keep separate.
+  The test: if two mentions share the same body part, same type, and are part of the same
+  ongoing clinical picture → merge. If they are different types → keep separate always.
 
 MEASUREMENT VALUE RULE:
 - If a specific number is stated → fill value field with that number
@@ -174,8 +244,13 @@ LABEL RULE:
 MEAL RULE:
 - Capture: label, time, eaten_out (true/false)
 - If eaten_out is true and a restaurant name is mentioned → put it in restaurant field
-- Do NOT capture items, ingredients, or food content of any kind
-- Detailed food content belongs in a downstream food system, not here
+- description: preserve the user's spoken food description as a single free-text string
+  This is a handoff field for the downstream food system — do not parse or structure it
+  Copy the relevant spoken content as-is: "150g chicken, 250g white bread, 40g butter"
+  If the user describes what they ate in any detail → put it here
+  If no food content was described → leave null
+- Do NOT attempt to parse ingredients, calculate nutrition, or structure food items
+- This layer is not the food system — it only preserves the description for handoff
 
 ─────────────────────────────────────────
 EXAMPLES
@@ -312,14 +387,16 @@ def structure_mentions(mentions: list, normalized_text: str) -> list:
 
     raw_input = tool_use_block.input
 
-    # Validate with Pydantic
-    try:
-        output = EntityOutput.model_validate(raw_input)
-        entities = [e.model_dump() for e in output.entities]
-    except Exception as e:
-        print(f"⚠️ structure_mentions: Pydantic validation error: {e}")
-        # Fallback: return raw dicts if Pydantic validation fails
-        entities = raw_input.get("entities", [])
+    # Validate with Pydantic — entity by entity so one bad entity doesn't kill the rest
+    entities = []
+    raw_entities = raw_input.get("entities", [])
+    for raw_entity in raw_entities:
+        try:
+            validated = EntityOutput.model_validate({"entities": [raw_entity]})
+            entities.extend([e.model_dump() for e in validated.entities])
+        except Exception as e:
+            print(f"⚠️ structure_mentions: Pydantic rejected entity {raw_entity.get('type', '?')} / {raw_entity.get('label', raw_entity.get('linked_to', '?'))}: {e}")
+            # Drop the malformed entity — do not pass raw dicts through
 
     return _resolve_time_references(entities)
 

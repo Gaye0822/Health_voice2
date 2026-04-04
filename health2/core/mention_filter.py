@@ -82,9 +82,27 @@ def filter_mentions(mentions: list, transcript: str) -> tuple:
         te = mention.get("temporal_evidence", "unclear")
         candidate_type = mention.get("candidate_type", "")
 
-        # theory and outside pass through always — structure.py handles them
-        if candidate_type in ("theory", "outside", "context", "other"):
+        # theory, outside, context pass through always — structure.py handles them
+        if candidate_type in ("theory", "outside", "context"):
             kept.append(mention)
+            continue
+
+        # other → pass through UNLESS reasoning indicates a label specificity failure
+        # If LLM already determined the label is vague/unresolvable, don't send to structure
+        if candidate_type == "other":
+            reasoning = mention.get("reasoning", "").lower()
+            label_fail_signals = [
+                "fails the label", "vague", "group label", "not resolvable",
+                "cannot be tracked", "unresolvable", "not specific",
+                "cannot determine", "label specificity"
+            ]
+            if any(signal in reasoning for signal in label_fail_signals):
+                dropped.append({
+                    **mention,
+                    "_filter_reason": "other: label specificity failure in reasoning"
+                })
+            else:
+                kept.append(mention)
             continue
 
         # Always drop — EXCEPT measurements from consultation_relay
@@ -97,7 +115,12 @@ def filter_mentions(mentions: list, transcript: str) -> tuple:
             continue
 
         # Needs same-session confirmation
+        # Exception: outcome mentions don't need same-session confirmation —
+        # they are observed directional changes, not actions that need to be confirmed today
         if te in NEEDS_CONFIRMATION:
+            if candidate_type == "outcome":
+                kept.append(mention)
+                continue
             if has_same_session_signal(mention, transcript):
                 kept.append(mention)
             else:

@@ -15,8 +15,22 @@ except ImportError:
 
 CANDIDATE_TYPES = [
     "intake", "symptom", "activity", "machine", "device",
-    "measurement", "meal", "theory", "outside", "other"
+    "measurement", "meal", "outcome", "theory", "outside", "other"
 ]
+
+
+def _get_knowledge_context() -> str:
+    """Inject KB registry into mention prompt so canonical labels are used at extraction time."""
+    try:
+        from core.db import get_knowledge_for_prompt
+        return get_knowledge_for_prompt()
+    except Exception:
+        try:
+            from db import get_knowledge_for_prompt
+            return get_knowledge_for_prompt()
+        except Exception:
+            return ""
+
 
 MENTION_TOOL = {
     "name": "extract_mentions",
@@ -118,16 +132,33 @@ symptom
   Ask: could a doctor document this as a clinical finding? If yes → symptom.
   If it is how the user feels in general → omit.
 
-  ABSENCE RULE: If the user reports that a symptom did NOT occur, was absent,
-  or did not happen — omit entirely. Do not extract the symptom with a qualifier
-  like "absent" or "no occurrence". The absence of a symptom is not a symptom.
-  Examples that must be omitted:
-  - "no nocturia last night" → omit
-  - "did not have nocturia" → omit
-  - "nocturia absent for first time in four months" → omit
-  - "no headache today" → omit
-  If the absence is notable, it may appear in a theory if the user speculates
-  about why it did not occur.
+  ABSENCE RULE:
+  There are three states for any symptom:
+  - explicit present: user says it occurred → extract as symptom, status: present (default)
+  - explicit absent: user says it did NOT occur → see below
+  - not mentioned: silence → omit entirely (unknown, not captured)
+
+  Explicit absence: extract ONLY if the symptom is a recurring tracked phenomenon —
+  something the user monitors regularly across multiple notes (e.g. nocturia, hot flashes,
+  a named recurring condition). For these, explicit negation is meaningful data.
+  Extract it as a symptom mention with confidence: high.
+  Structure.py will assign status: absent.
+
+  Explicit absence for non-recurring, incidental symptoms → omit.
+  "No headache today" — headache is not necessarily a tracked recurring phenomenon → omit.
+  "No nocturia last night" — nocturia is a recurring tracked phenomenon → extract.
+
+  Retrospective absence interval: if the user says something like
+  "I haven't had nocturia for 5-6 days" — extract it. Structure.py will handle the interval.
+
+  If the absence is notable and the user speculates about why → also extract a theory.
+
+  HOW TO IDENTIFY A RECURRING TRACKED PHENOMENON:
+  The user treats it as something they monitor over time. Signals include:
+  - They mention it across multiple contexts or reference its history
+  - They note its absence as meaningful ("first time in weeks", "finally no X")
+  - It is a named condition associated with a chronic or recurring health concern
+  When in doubt: if the user's phrasing suggests the absence itself is noteworthy → extract.
 
   CONTEXT-DEPENDENCY TEST — apply this before extracting any symptom:
   Ask: would this finding exist on any other day, in any other context, without the
@@ -172,6 +203,22 @@ symptom
   The difference is whether the user is flagging it as a problem they want tracked,
   or simply acknowledging it exists as background information.
 
+  GUT HEALTH TRACKING — always keep in scope:
+  Gut-related symptoms are high-value tracking items even when described informally.
+  Do not require clinical precision. Preserve the user's own language.
+  Always extract as symptom when the user reports any of the following:
+  - Bowel frequency ("going 10 times a day", "bathroom every hour")
+    → use canonical label: "bowel frequency"
+  - Stool quality or consistency ("soft mess", "complete disaster", "not great")
+    → use canonical label: "stool consistency"
+  - Gas severity or frequency ("terrible gas", "gas all night", "gassy after dinner")
+    → use canonical label: "gas"
+  - Abdominal or stomach pain ("stomach in so much pain", "gut hurts")
+    → use canonical label: "abdominal pain"
+  - Bowel urgency ("running to the toilet", "had to go urgently")
+    → use canonical label: "bowel urgency"
+  These are never throwaway noise — always extract them.
+
 activity
   A physical session the user performed — exercise, breathwork, meditation,
   cold exposure and similar.
@@ -205,10 +252,32 @@ measurement
   Do NOT skip the measurement entirely just because no number was given —
   the directional observation is still worth preserving.
 
+outcome
+  An observed directional change in a tracked health variable over time,
+  linked to an intervention, substance, or activity.
+  Ask: is the user reporting that something got better or worse as a result of something else?
+  If yes → outcome.
+
+  An outcome is NOT a symptom — it is a change, not a current state.
+  "My knee pain is better" alone → symptom (current state, qualifier: better)
+  "My knee pain has been improving since I started the peptides" → outcome (directional change linked to intervention)
+  "Intestinal health improved since FMT" → outcome
+  "HRV has been trending up since I stopped the medication" → outcome
+
+  Only extract if:
+  - There is a clear direction (better / worse / improving / declining)
+  - It is linked to something (intervention, substance, activity, period of time)
+  - The user is reporting a change over time, not just a current state
+
+  Do not extract vague general wellbeing statements as outcomes.
+  "Feeling better overall" → omit (not linked to anything specific)
+
 meal
   An eating event. Capture timing and whether it was eaten out.
   If eaten out and a restaurant name is mentioned, capture it.
-  Do NOT extract ingredient lists, gram-level detail, or food content of any kind.
+  If the user describes food content in any detail → still extract as meal.
+  The spoken food description will be preserved as a handoff field for the downstream food system.
+  Do not attempt to parse or structure the food content here — just extract the meal event.
 
 theory
   The user's own speculation, causal explanation, or personal interpretation.
@@ -483,11 +552,17 @@ def extract_mentions(normalized_text: str) -> list:
     Uses tool_use for strict schema-enforced output.
     Does NOT structure or interpret — only finds and classifies.
     """
+    # Inject KB registry so canonical labels are available at extraction time
+    knowledge = _get_knowledge_context()
+    system = SYSTEM_PROMPT
+    if knowledge:
+        system = SYSTEM_PROMPT + f"\n\n{knowledge}"
+
     response = client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=2000,
         temperature=0,
-        system=SYSTEM_PROMPT,
+        system=system,
         tools=[MENTION_TOOL],
         tool_choice={"type": "any"},
         messages=[
