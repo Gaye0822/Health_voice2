@@ -71,9 +71,53 @@ For each mention, work through these questions before writing the entity:
 
 3. IS THIS AN OBSERVED FACT OR AN INTERPRETATION?
    Observed facts → event layer (intake, symptom, activity, machine, measurement etc.)
-   User speculation or causal explanation → theory
+   User speculation or causal explanation about own body → theory
+   Speculation about devices, data quality, or addressed to others → outside
+   THEORY SELF-DIRECTED RULE: theory is ONLY for speculation about the user's
+   own body or health outcomes. "Oura data is garbage", "Eight Sleep is more accurate",
+   "the team should use Loop" → all outside, never theory.
+
+   OUTCOME vs THEORY — language test:
+   Before creating an outcome entity, check the user's exact language.
+
+   Outcome signals — observed, established pattern:
+   "tends to", "has been", "I've noticed", "every time X happens Y",
+   "for years", "consistently", "it reduces", "it improves", "has been working"
+
+   Theory signals — speculative, uncertain:
+   "maybe", "I think", "could be", "possibly", "I wonder",
+   "there's a possibility", "might be", "not sure but", "I guess"
+
+   Rule: if ANY theory signal is present in the relevant sentence → theory, not outcome.
+   If language is neutral or observational with no hedging → outcome.
+
+   OUTCOME REASONING — required before creating any outcome entity:
+   Before structuring an outcome, answer this question internally:
+   "What specific language in the transcript confirms this is an observed
+   pattern rather than speculation?"
+   - If you find clear observational language (no hedging) → outcome
+   - If you cannot find such language, or hedging is present → theory instead
+   This reasoning step is mandatory — do not skip it.
    Provider recommendation not yet acted on → theory or omit
    Equipment issue, procurement note, missed recording → outside
+
+   INTERVENTION vs INTAKE — critical distinction:
+   An intervention is a multi-session treatment protocol with a defined start and expected end.
+   A single completed health event is NEVER an intervention — it is intake, activity, or machine.
+
+   These are interventions:
+   - "I've been on antibiotics for 5 days" → intervention
+   - "Started a peptide course last month" → intervention
+   - "Doing a 30-day FMT protocol" → intervention (multi-session explicitly stated)
+
+   These are NOT interventions — use intake, activity, or machine:
+   - "Had the FMT treatment yesterday" → intake (single session)
+   - "Got an IV" → intake
+   - "Did Novothor at 4pm" → machine
+   - "Took paracetamol" → intake
+
+   Rule: if the user describes a single completed event → never intervention.
+   Intervention requires explicit multi-session or protocol language.
 
    For symptoms specifically: ask whether this is a body state the user is currently
    experiencing, or whether it names a pathogen, virus, or infection source.
@@ -154,14 +198,25 @@ SYMPTOM STATUS RULE:
 
 OUTCOME ENTITY RULE:
 An outcome captures an observed directional change in a health variable, linked to something.
-The outcome entity uses these fields ONLY: linked_to, onset_time, qualifier, direction.
+The outcome entity uses these fields ONLY: linked_to, what, onset_time, qualifier, direction.
 NEVER use label, action, dose, unit, category, or any intake field in an outcome entity.
+
+WHAT FIELD — always fill:
+The what field captures what specifically changed — the subject of the outcome.
+This is the most important field for making outcomes meaningful over time.
+- "language recognition improved since selegiline" → what: "language recognition"
+- "nocturia reduced since paracetamol" → what: "nocturia"
+- "caffeine sensitivity increased" → what: "caffeine sensitivity"
+- "gut health improving since FMT" → what: "gut health"
+- "HRV trending up since stopping medication" → what: "HRV"
+If what is not explicitly stated but clearly implied → fill it from context.
+Only leave null if genuinely cannot be determined.
 
 The substance or activity that caused the outcome is NOT part of the outcome entity.
 It has its own separate entity (intake, activity, etc.).
 
 "paracetamol 500mg first night" → intake entity (label: paracetamol, action: took, dose: 500)
-"paracetamol reduces nocturia by 50%" → outcome entity (linked_to: paracetamol, direction: positive)
+"paracetamol reduces nocturia by 50%" → outcome entity (linked_to: paracetamol, what: "nocturia", direction: positive)
 These are TWO separate entities. Never combine them into one.
 
 If a mention came in as intake → structure it as intake, full stop.
@@ -188,6 +243,22 @@ TIME FIELDS:
 - Clock time, date, or named period (morning, evening) only
 - Relative phrases ("recently", "last week", "three weeks ago") → null
 - Put timing context in notes if relevant
+
+END_TIME FIELD (activity and machine only):
+- Fill only if the user explicitly states when the session ended
+- "from 5:30am to 7:00am" → start_time: "5:30am", end_time: "7:00am"
+- If only duration is stated → fill duration, leave end_time null
+- If only start_time is stated → leave end_time null
+
+EVENT_DATE FIELD (intake, activity, machine):
+- Use when the event did NOT happen today — it happened on a specific past day
+- Fill with the user's own words: "yesterday", "Friday", "last week"
+- Do NOT convert to a date — preserve as stated
+- Examples:
+  "I had the FMT treatment yesterday" → event_date: "yesterday"
+  "took paracetamol on Friday" → event_date: "Friday"
+  "did the IV last week" → event_date: "last week"
+- If the event happened today → leave event_date null
 
 DURATION:
 - If expressed as hours and minutes ("seven hours 20 minutes", "1 hour 45 minutes")
@@ -231,6 +302,21 @@ MEASUREMENT VALUE RULE:
   write the observation into the notes field
 - NEVER use 0 as a substitute for "no value stated" — 0 means the metric was actually zero
 - NEVER omit a measurement just because no number exists — preserve it with value: null
+
+THEORY LINKED_TO RULE:
+- Always try to fill linked_to_label and linked_to_type.
+- Look at what was discussed just before or after the theory — that is almost always
+  what the theory is about. Link to it.
+- Only leave linked_to_label null if the theory genuinely cannot be connected to
+  any specific entity in this note.
+- Examples:
+  "I don't know what's going on with my stomach" → linked_to_label: "stool consistency",
+  linked_to_type: "symptom" (stomach issues were just discussed)
+  "Maybe it's the cold plunge affecting my HRV" → linked_to_label: "cold plunge",
+  linked_to_type: "activity"
+  "I have no idea why I slept so well" → linked_to_label: "sleep quality",
+  linked_to_type: "measurement"
+  "I don't know, life sucks" → linked_to_label: null (genuinely unconnected)
 
 LABEL RULE:
 - Specific named entity only

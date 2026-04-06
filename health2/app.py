@@ -496,6 +496,43 @@ elif st.session_state.step == "done":
     st.header("✅ Done!")
     st.success(f"Saved. Transcript ID: {st.session_state.transcript_id}")
 
+    # ── RAG export ────────────────────────────────────────────────────────
+    if st.button("💾 Save as RAG Example", use_container_width=True):
+        import os, json
+        from datetime import datetime
+
+        rag_dir = os.path.join(os.path.dirname(__file__), "rag_store")
+        os.makedirs(rag_dir, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        filename = f"{timestamp}_transcript_{st.session_state.transcript_id}.txt"
+        filepath = os.path.join(rag_dir, filename)
+
+        lines = []
+        lines.append("=== TRANSCRIPT ===")
+        lines.append(st.session_state.transcript or "")
+        lines.append("")
+        lines.append("=== NORMALIZED ===")
+        lines.append(st.session_state.normalized or "")
+        lines.append("")
+        lines.append("=== MENTIONS + REASONING ===")
+        for m in (st.session_state.mentions or []):
+            lines.append(f"[{m.get('candidate_type','?')}] {m.get('raw_mention','')}")
+            lines.append(f"  temporal: {m.get('temporal_evidence','')}")
+            lines.append(f"  reasoning: {m.get('reasoning','')}")
+            lines.append("")
+        lines.append("=== ENTITIES (APPROVED) ===")
+        lines.append(json.dumps(st.session_state.entities, indent=2, ensure_ascii=False))
+        lines.append("")
+        lines.append("=== METADATA ===")
+        lines.append(f"approved_at: {datetime.now().isoformat()}")
+        lines.append(f"transcript_id: {st.session_state.transcript_id}")
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+
+        st.toast(f"✅ Saved to rag_store/{filename}")
+
     if st.button("Process Another Note", type="primary"):
         for key in defaults:
             st.session_state[key] = defaults[key]

@@ -62,6 +62,17 @@ Before assigning a type to anything, ask these three questions in order:
    If it has not happened yet, or if it was only recommended or discussed → do not
    extract as a health event. Route to theory or omit.
 
+   EXCEPTION FOR INTAKE OMISSIONS:
+   When the user reports NOT taking a specific named substance, a lower confidence
+   threshold applies. Phrases like "I don't think I've done X", "I haven't done X",
+   "I may not have taken X", "I skipped X" are sufficient to extract as intake
+   with action: did_not_take — even if the user's language is slightly uncertain.
+   The substance must still be specifically named.
+   Examples:
+   - "I don't think I've done the tudca in two days" → intake, did_not_take ✅
+   - "I may not have taken my HMB" → intake, did_not_take ✅
+   - "I haven't done my supplements" → omit (vague group label) ❌
+
 2. IS THIS ABOUT THE USER'S OWN BODY OR ACTIONS?
    Is this something the user did, experienced, or measured directly?
    Or is it about another person, about the external world, about equipment,
@@ -252,6 +263,31 @@ measurement
   Do NOT skip the measurement entirely just because no number was given —
   the directional observation is still worth preserving.
 
+intervention
+  A multi-session treatment protocol with a defined start and an expected end.
+  An intervention spans days or weeks — it is not a single event.
+
+  Ask these two questions:
+  1. Does this have a beginning AND an expected end (even if vague)?
+  2. Is this a protocol or course — not just a one-time action?
+  If both yes → intervention.
+  If either no → intake (single dose or substance) or activity (single session).
+
+  These ARE interventions:
+  - "I've been on antibiotics for 5 days" → intervention
+  - "Started a peptide course" → intervention
+  - "Doing a 30-day elimination diet" → intervention
+  - "FMT protocol" → intervention (only if multi-session series is implied)
+
+  These are NOT interventions:
+  - "Had the FMT treatment yesterday" → intake (single session, no protocol implied)
+  - "Took paracetamol" → intake
+  - "Did Novothor" → machine (single session)
+  - "Got an IV" → intake (single dose)
+
+  When in doubt: if the user describes a single completed event → intake or activity.
+  Intervention requires explicit multi-session or protocol language.
+
 outcome
   An observed directional change in a tracked health variable over time,
   linked to an intervention, substance, or activity.
@@ -280,13 +316,33 @@ meal
   Do not attempt to parse or structure the food content here — just extract the meal event.
 
 theory
-  The user's own speculation, causal explanation, or personal interpretation.
+  The user's own speculation, causal explanation, or personal interpretation
+  about their OWN body or health.
+
+  SELF-DIRECTED RULE: Theory must be about the user's own body, symptoms,
+  or health outcomes. If the speculation is about a device, system, data quality,
+  or is addressed to someone else → outside, not theory.
+
+  These ARE theories:
+  - "Maybe the cold plunge affected my HRV" → own body ✅
+  - "I think the paracetamol is reducing my nocturia" → own body ✅
+  - "Probably stress caused it" → own body ✅
+  - "Could be the stem cells" → own body ✅
+
+  These are NOT theories → outside:
+  - "Oura data is complete garbage" → device quality, not own body ❌
+  - "The team should use Loop instead" → addressed to others ❌
+  - "Eight Sleep is more accurate than Oura" → device comparison ❌
+  - "The system needs to handle this better" → meta-commentary ❌
+
   Also use for clinician recommendations or proposed future interventions
   the user is relaying but has not yet acted on.
 
 outside
   Something about the external world — equipment issues, procurement problems,
   missed recordings, provider operational notes.
+  Also includes: data quality observations about devices, notes addressed to
+  the team or another person, meta-commentary about the system itself.
   Not a health event.
 
 other

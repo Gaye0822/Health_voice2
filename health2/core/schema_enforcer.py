@@ -21,15 +21,15 @@ from typing import Optional
 # ─────────────────────────────────────────
 
 SCHEMA_FIELDS = {
-    "intake":       {"type", "label", "action", "dose", "unit", "time", "category", "notes"},
+    "intake":       {"type", "label", "action", "dose", "unit", "time", "event_date", "category", "notes"},
     "symptom":      {"type", "label", "status", "onset_time", "severity", "qualifier", "duration", "interval", "source", "notes"},
-    "activity":     {"type", "label", "start_time", "duration", "status", "notes"},
-    "machine":      {"type", "label", "start_time", "duration", "status", "notes"},
+    "activity":     {"type", "label", "start_time", "end_time", "duration", "status", "event_date", "notes"},
+    "machine":      {"type", "label", "start_time", "end_time", "duration", "status", "event_date", "notes"},
     "device":       {"type", "label", "start_time", "status"},
     "measurement":  {"type", "metric", "value", "unit", "time", "source", "notes"},
     "meal":         {"type", "label", "time", "eaten_out", "restaurant", "description"},
     "intervention": {"type", "label", "start_date", "end_date", "status", "notes"},
-    "outcome":      {"type", "linked_to", "onset_time", "qualifier", "direction"},
+    "outcome":      {"type", "linked_to", "what", "onset_time", "qualifier", "direction"},
     "test":         {"type", "label", "time", "status", "result", "notes"},
     "context":      {"type", "raw_text", "related_to"},
     "theory":       {"type", "raw_text", "linked_to_label", "linked_to_type"},

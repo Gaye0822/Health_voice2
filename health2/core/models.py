@@ -73,6 +73,7 @@ class IntakeEntity(BaseModel):
     dose: Optional[float] = None
     unit: Optional[str] = None
     time: Optional[str] = None
+    event_date: Optional[str] = None  # for past events: "yesterday", "Friday", "last week"
     category: IntakeCategory
     notes: Optional[str] = None
 
@@ -96,8 +97,10 @@ class ActivityEntity(BaseModel):
     type: Literal["activity"]
     label: str
     start_time: Optional[str] = None
+    end_time: Optional[str] = None
     duration: Optional[str] = None
     status: ActivityStatus
+    event_date: Optional[str] = None  # for past events: "yesterday", "Friday", "last week"
     notes: Optional[str] = None
 
 
@@ -105,8 +108,10 @@ class MachineEntity(BaseModel):
     type: Literal["machine"]
     label: str
     start_time: Optional[str] = None
+    end_time: Optional[str] = None
     duration: Optional[str] = None
     status: MachineStatus
+    event_date: Optional[str] = None  # for past events: "yesterday", "Friday", "last week"
     notes: Optional[str] = None
 
 
@@ -160,6 +165,7 @@ class InterventionEntity(BaseModel):
 class OutcomeEntity(BaseModel):
     type: Literal["outcome"]
     linked_to: str
+    what: Optional[str] = None        # what changed: "language recognition", "caffeine sensitivity", "nocturia"
     onset_time: Optional[str] = None
     qualifier: Optional[str] = None
     direction: OutcomeDirection
@@ -250,7 +256,7 @@ def get_mention_tool_schema() -> dict:
 
 ENTITY_SCHEMAS = {
     "intake": {
-        "fields": ["label", "action", "dose", "unit", "time", "category", "notes"],
+        "fields": ["label", "action", "dose", "unit", "time", "event_date", "category", "notes"],
         "actions": ["took", "did_not_take"],
         "categories": ["supplement", "prescription", "OTC", "food"]
     },
@@ -259,11 +265,11 @@ ENTITY_SCHEMAS = {
         "statuses": ["present", "absent"]
     },
     "activity": {
-        "fields": ["label", "start_time", "duration", "status", "notes"],
+        "fields": ["label", "start_time", "end_time", "duration", "status", "event_date", "notes"],
         "statuses": ["completed", "planned", "incomplete"]
     },
     "machine": {
-        "fields": ["label", "start_time", "duration", "status", "notes"],
+        "fields": ["label", "start_time", "end_time", "duration", "status", "event_date", "notes"],
         "statuses": ["used", "planned"]
     },
     "device": {
@@ -282,7 +288,7 @@ ENTITY_SCHEMAS = {
         "statuses": ["active", "completed", "unknown"]
     },
     "outcome": {
-        "fields": ["linked_to", "onset_time", "qualifier", "direction"],
+        "fields": ["linked_to", "what", "onset_time", "qualifier", "direction"],
         "directions": ["positive", "negative", "mixed", "unknown"]
     },
     "test": {

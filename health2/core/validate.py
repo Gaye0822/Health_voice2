@@ -240,6 +240,17 @@ If no changes needed, return original entities with empty changes list."""
 
         # Deterministic guard: validator must never change entity types
         # unless the KB explicitly instructs a type correction
+        # Build set of labels that KB explicitly corrected in this round
+        kb_corrected_labels = set()
+        for change in llm_changes:
+            change_lower = change.lower()
+            if any(kw in change_lower for kw in ["kb", "registry", "knowledge base", "canonical", "correction"]):
+                # Extract label from change message if possible
+                for e in to_validate:
+                    label = e.get("label", e.get("metric", e.get("linked_to", e.get("raw_text", ""))))
+                    if label and label.lower() in change_lower:
+                        kb_corrected_labels.add(label)
+
         input_types = {
             e.get("label", e.get("metric", e.get("linked_to", e.get("raw_text", "")))): e.get("type")
             for e in to_validate
@@ -248,12 +259,14 @@ If no changes needed, return original entities with empty changes list."""
             label = e.get("label", e.get("metric", e.get("linked_to", e.get("raw_text", ""))))
             original_type = input_types.get(label)
             if original_type and e.get("type") != original_type:
-                # Exception: if validated entity has action field (took/did_not_take),
-                # it is unambiguously an intake — action field only exists in IntakeEntity.
-                # This means structure made a type error; validator is correcting it. Allow it.
+                # Exception 1: action field confirms intake
                 if e.get("action") in ("took", "did_not_take"):
-                    print(f"⚙️  Guard allowing intake correction for '{label}': structure made it {original_type}, action field confirms it is intake")
+                    print(f"⚙️  Guard allowing intake correction for '{label}': action field confirms intake")
                     all_changes.append(f"Structure type error corrected: '{label}' was {original_type}, action field confirms intake")
+                # Exception 2: KB explicitly instructed this type correction
+                elif label in kb_corrected_labels:
+                    print(f"⚙️  Guard allowing KB type correction for '{label}': {original_type} → {e['type']}")
+                    all_changes.append(f"KB type correction applied: '{label}' {original_type} → {e['type']}")
                 else:
                     print(f"⚠️ Validator changed type of '{label}' from {original_type} to {e['type']} — reverting")
                     all_changes.append(f"Validator attempted to change type of '{label}' from {original_type} to {e['type']} — reverted by guard")
