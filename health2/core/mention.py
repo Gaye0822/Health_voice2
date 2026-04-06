@@ -249,19 +249,35 @@ device
   AND it is not merely the source of a measurement already being extracted.
 
 measurement
-  A body-level metric recorded from a device or test.
-  HRV, weight, blood glucose, blood pressure, SpO2, sleep duration from a tracker,
-  and similar objective measurements qualify.
-  Subjective scores, exercise performance metrics, and dietary estimates do not.
+  A body-level metric with an objective numeric value, not captured by an automatic device pipeline.
 
-  Extract as measurement if:
-  - A specific numeric value is stated → value field will be filled
-  - Only a directional observation is stated ("HRV is down", "heart rate elevated after 2 AM")
-    → still extract as measurement, value will be null, observation goes in notes
+  Before extracting any measurement, work through these three questions in order:
 
-  Do NOT invent a value of 0 when no number is stated.
-  Do NOT skip the measurement entirely just because no number was given —
-  the directional observation is still worth preserving.
+  1. IS THIS FROM A WEARABLE OR MONITORING DEVICE?
+     Signals: "Oura says", "Eight Sleep tracked", "according to WHOOP", "my HRV",
+     "sleep score", "Nightly Recharge", "SpO2 from Oura", "HRV from ring"
+     Device-sourced metrics: HRV, heart rate, sleep score, deep sleep, REM,
+     SpO2, body temperature, recovery score, readiness score
+     If clearly device-sourced → omit. The device pipeline handles this.
+
+  2. IS THIS A SUBJECTIVE QUALITY JUDGMENT WITH NO NUMBER?
+     Signals: "awful", "crappy", "in the cellar", "miserable", "terrible",
+     "elevated" without a value, "down" without a value, "better", "worse"
+     If yes → omit. This is narrative commentary, not a measurement.
+
+  3. IS THIS AN OBJECTIVE VALUE NOT CAPTURED ELSEWHERE?
+     Gabriel states a specific number AND it does not come from an automatic device:
+     - Weight read from a scale: "82.5 kg" ✅
+     - Blood glucose from finger prick: "glucose 95" ✅
+     - Lumen score read manually: "Lumen score 4.5" ✅
+     - Lab result stated aloud: "vitamin D 45 ng/ml" ✅
+     - Doubly labeled water result: "3300 kcal/day" ✅
+     If yes → extract as measurement.
+
+  Only extract if question 3 applies and questions 1 and 2 do not.
+  If no specific number is stated → omit entirely. Do not extract directional
+  observations ("HRV is down", "heart rate elevated") — these are device data
+  the pipeline already has access to.
 
 intervention
   A multi-session treatment protocol with a defined start and an expected end.
@@ -319,6 +335,20 @@ theory
   The user's own speculation, causal explanation, or personal interpretation
   about their OWN body or health.
 
+  CRITICAL RULE — USER'S OWN WORDS ONLY:
+  A theory must come directly from a sentence where the user themselves speculates.
+  Do NOT infer, construct, or connect a theory from context.
+  If the user does not explicitly speculate in their own words → no theory.
+
+  The test: can you find the exact sentence where the user speculates?
+  If yes → extract that speculation as theory.
+  If no → omit. Do not invent a theory the user did not state.
+
+  "I don't understand what's going on" → NOT a theory. User is expressing confusion,
+  not speculating. Do not construct a causal theory from surrounding context.
+  "Maybe the cold plunge affected my HRV" → theory ✅ User's own speculation.
+  "Probably stress caused it" → theory ✅ User's own words.
+
   SELF-DIRECTED RULE: Theory must be about the user's own body, symptoms,
   or health outcomes. If the speculation is about a device, system, data quality,
   or is addressed to someone else → outside, not theory.
@@ -344,6 +374,18 @@ outside
   Also includes: data quality observations about devices, notes addressed to
   the team or another person, meta-commentary about the system itself.
   Not a health event.
+
+  ALWAYS extract as outside when:
+  - User describes a device malfunctioning in a specific, quantified way
+    "Oura starts recording sleep at midnight when I fell asleep at 10:30" → outside ✅
+    "there's been a massive divergence between Eight Sleep and Oura since PONS" → outside ✅
+    Even if the user does not explicitly label it a problem — if it describes a
+    specific device failure or divergence, extract it.
+  - User addresses the team, another person, or the system
+  - User mentions procurement, logistics, or operational matters
+
+  Do NOT omit device issues just because they are not about the user's body.
+  That is exactly why they are outside — they are about the external world.
 
 other
   Health-relevant but does not fit the above.
@@ -397,20 +439,88 @@ For each mention, answer these questions in the reasoning field:
 1. Did this actually happen, or is it a plan, recommendation, or reference?
 2. Is this about the user's own body or actions?
 3. Is the label specific and resolvable enough to track over time?
-4. For symptoms: is the user currently experiencing this, or referencing/dismissing it?
-   Did the user explicitly say it is "probably nothing", "not really", "not necessarily"?
-   Is this an expected after-effect of an activity rather than an independent finding?
+4. For symptoms — complete this sentence first:
+   "This is a named clinical finding that exists independently of any activity or
+   context, and the user is actively reporting it as a current problem."
+   If the sentence feels natural and true → proceed to extract as symptom.
+   If it feels forced → omit or route elsewhere.
+
+   Examples:
+   "Shivering all night from cold room" → independent, active complaint ✅ → symptom
+   "Cold sensation after cold plunge" → not independent, activity after-effect ❌ → omit
+   "Increased caffeine sensitivity" → not a named clinical finding ❌ → omit or theory
+   "Strength loss during workout" → performance observation, not independent ❌ → omit
+   "Blepharitis, eyes can barely open" → named condition, active complaint ✅ → symptom
+
+   Then confirm:
+   - Is the user currently experiencing this, or referencing/dismissing it?
+   - Did the user say "probably nothing", "not really", "not necessarily"?
+   - Is this an expected after-effect of an activity?
+   - Is this a vague subjective state rather than a named clinical finding?
+
 5. For intake: is the substance specifically named, or is it a vague group label?
-6. What is the temporal evidence, assessed from this mention's own context only?
+   Is there same-session confirmation it was taken today, or is this active_regimen/speculation?
+6. For theory candidates — complete this sentence first:
+   "The user is speculating about their OWN body or health in THIS note."
+   If the sentence feels natural and true → extract as theory.
+   If it feels forced → outside or omit.
+
+   A theory requires the user to make an explicit speculative claim.
+   These expressions are NOT theories — omit them:
+   - Confusion: "I don't understand what's going on" → not speculation, omit
+   - Self-dismissal: "I guess I'm just paranoid", "probably nothing" → not speculation, omit
+   - Hope/expectation: "I hope this will go away" → not speculation, omit
+   - Emotional reaction: "God knows", "who knows" → not speculation, omit
+
+   These ARE theories — the user makes an explicit speculative claim:
+   - "Maybe cold plunge affected my HRV" → explicit speculation ✅
+   - "Probably stress caused the nocturia" → explicit causal claim ✅
+   - "Could be the stem cells" → explicit candidate cause ✅
+   - "I think I'm on the wrong antibiotic" → explicit assessment ✅
+   - "I don't know how it could be infected, nothing's been in there" → dismissing a possibility,
+     this IS a theory — user is evaluating and ruling out a cause ✅
+
+   Outside examples:
+   - "Oura data is complete garbage" → device quality ❌ → outside
+   - "The team should use Loop instead" → addressed to others ❌ → outside
+
+7. For outcome candidates — complete this sentence first:
+   "Because of [linked_to], [what] has changed and this is an established fact."
+   If the sentence feels natural and true → proceed to tests a, b, c below.
+   If it feels forced, uncertain, or refers to a past completed event → theory or omit.
+
+   Examples:
+   "Because of paracetamol, nocturia has changed and this is an established fact." ✅ → outcome
+   "Because of selegiline, language recognition has changed and this is an established fact." ❌ → not measurable, theory
+   "Because of craniosacral, right knee got better last week and this is an established fact." ❌ → past event, omit
+   "Because of PONS, deep sleep jumped on Eight Sleep and this is an established fact." ❌ → device data, omit
+
+   Then confirm all three:
+   a. Is the language observational with no hedging? ("tends to", "for years", "consistently")
+      If "apparently", "maybe", "I think", "could be" is present → theory, not outcome
+   b. Is the "what" a trackable, measurable construct with a clear baseline?
+      "nocturia", "stool consistency", "body weight", "blood glucose" → yes
+      "language recognition", "mental stuff", "psychological benefits", "energy", "how I feel" → no
+      If the construct is not measurable → theory, not outcome
+   c. Is the "what" something the device pipeline already tracks automatically?
+      "deep sleep", "HRV", "heart rate", "sleep score", "SpO2" → device-tracked → omit
+   All three must pass. If any fails → theory or omit.
+7. What is the temporal evidence, assessed from this mention's own context only?
 
 Example reasoning for a symptom that should be omitted:
 "User says 'a little bit sniffly but doesn't feel like sick necessarily, just the air
 is super dry' — user explicitly dismisses this as environmental, not a clinical finding.
 Omitting."
 
-Example reasoning for a symptom that should be kept:
-"User says 'had a mini hot flash in the middle of the night' — specific, named,
-clinically recognisable finding. User does not dismiss it. Keeping as symptom."
+Example reasoning for an outcome that should be theory instead:
+"User says 'definitely starting to feel the upsweep in language recognition as a result
+of selegiline' — language is observational (passes test 1) but 'language recognition'
+is not a defined trackable construct with a baseline (fails test 2). Making theory."
+
+Example reasoning for a valid outcome:
+"User says 'paracetamol tends to reduce my nocturia, been a trend for years, reduces
+odds by 50%' — observational language, no hedging (passes test 1). Nocturia is tracked
+across multiple notes, binary and comparable (passes test 2). Keeping as outcome."
 
 ─────────────────────────────────────────
 EXAMPLES
@@ -599,7 +709,91 @@ Result mentions:
 
 Key rule: a vague group label is never acceptable as an intake label,
 even when action is did_not_take and even when the user clearly means something real.
-If the substance cannot be named, the entity cannot be tracked — omit it."""
+If the substance cannot be named, the entity cannot be tracked — omit it.
+
+---
+
+EXAMPLE 7 — measurement extraction: device data vs objective values
+Transcript:
+"My HRV went down the tube after 2 AM, heart rate was elevated all night.
+Weight this morning 82.5 kg. Lumen score was a 4 and a half, awful result.
+Blood glucose came back at 95 from the lab."
+
+Thinking:
+- "HRV went down the tube after 2 AM" → measurement reasoning:
+  1. Device-sourced? YES — HRV comes from Oura/WHOOP automatically
+  2. Subjective? Also yes — "went down the tube" is narrative
+  3. Objective value not captured elsewhere? NO
+  → OMIT. Device pipeline already has this.
+  reasoning: "HRV is device-tracked. No numeric value. This is narrative commentary. Omitting."
+
+- "heart rate elevated all night" → measurement reasoning:
+  1. Device-sourced? YES — heart rate is tracked continuously by device
+  2. Subjective? Yes — "elevated" with no number
+  3. Objective value not captured elsewhere? NO
+  → OMIT.
+  reasoning: "Heart rate is device-tracked. No numeric value. Narrative commentary. Omitting."
+
+- "weight 82.5 kg" → measurement reasoning:
+  1. Device-sourced? NO — Gabriel reads a scale manually
+  2. Subjective? NO — specific number
+  3. Objective value not captured elsewhere? YES
+  → EXTRACT as measurement.
+  reasoning: "Specific numeric value. Not from automatic device. Extracting."
+
+- "Lumen score 4.5" → measurement reasoning:
+  1. Device-sourced? Lumen is a device but Gabriel reads and reports it manually
+  2. Subjective? NO — specific number
+  3. Objective value not captured elsewhere? YES — Lumen has no automatic pipeline here
+  → EXTRACT as measurement.
+  reasoning: "Specific numeric value stated by user. Extracting."
+
+- "blood glucose 95 from the lab" → measurement reasoning:
+  1. Device-sourced? NO — lab result
+  2. Subjective? NO — specific number
+  3. Objective value not captured elsewhere? YES
+  → EXTRACT as measurement.
+  reasoning: "Lab result with specific value. Extracting."
+
+Result mentions:
+[weight (measurement), Lumen score (measurement), blood glucose (measurement)]
+HRV and heart rate → omitted (device-tracked, no numeric value)
+
+---
+
+EXAMPLE 8 — symptom vs activity after-effect vs expected physiological response
+Transcript:
+"About to finish a record 4x4 at 9.8 mph. Interestingly the heart rate super low —
+a combination of the cold plunge and the meditation. Did a cold plunge before lifting.
+My back is at its limits. Woke up shivering again last night, room was freezing."
+
+Thinking:
+- "heart rate super low" → context-dependency test:
+  Would low heart rate occur without the cold plunge and meditation? 
+  No — user explicitly attributes it to these activities.
+  Is this a complaint? No — user says "interestingly", not "worryingly".
+  Also device-tracked, no numeric value.
+  → NOT a symptom, NOT a measurement. Activity after-effect → theory.
+  reasoning: "Expected physiological response to cold plunge + meditation. User attributes it directly. Not independent clinical finding. Device-tracked. Omitting as symptom."
+
+- "back is at its limits" → is the user flagging this as a current clinical complaint?
+  No — it is mentioned as context for workout intensity, not as a primary complaint.
+  → context or omit.
+  reasoning: "Mentioned as workout context, not as active clinical complaint. Omitting."
+
+- "woke up shivering last night, room was freezing" → context-dependency test:
+  Would shivering occur without the cold room? Yes — shivering is independent body response.
+  Is it recurring overnight? Yes. Is it clinically trackable? Yes.
+  → symptom ✅
+  reasoning: "Overnight shivering, independent of any specific activity, recurring. Clinical finding. Keeping."
+
+- "cold plunge before lifting" → activity ✅
+- "heart rate low because of cold plunge + meditation" → theory ✅
+
+Result mentions:
+[cold plunge (activity), shivering (symptom), cold plunge/meditation → low heart rate (theory)]
+"heart rate super low" → omitted as symptom and measurement
+"back at limits" → omitted (workout context, not active complaint)"""
 
 
 def extract_mentions(normalized_text: str) -> list:

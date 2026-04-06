@@ -193,9 +193,12 @@ class TheoryEntity(BaseModel):
     linked_to_type: Optional[str] = None
 
 
+OutsideSubtype = Literal["device_failure", "procurement", "operational", "general"]
+
 class OutsideEntity(BaseModel):
     type: Literal["outside"]
     raw_text: str
+    subtype: Optional[OutsideSubtype] = None  # device_failure: unreliable source/sensor issue
 
 
 # ─────────────────────────────────────────
@@ -302,6 +305,7 @@ ENTITY_SCHEMAS = {
         "fields": ["raw_text", "linked_to_label", "linked_to_type"]
     },
     "outside": {
-        "fields": ["raw_text"]
+        "fields": ["raw_text", "subtype"],
+        "subtypes": ["device_failure", "procurement", "operational", "general"]
     }
 }

@@ -33,7 +33,7 @@ SCHEMA_FIELDS = {
     "test":         {"type", "label", "time", "status", "result", "notes"},
     "context":      {"type", "raw_text", "related_to"},
     "theory":       {"type", "raw_text", "linked_to_label", "linked_to_type"},
-    "outside":      {"type", "raw_text"},
+    "outside":      {"type", "raw_text", "subtype"},
 }
 
 # Relative phrases that are not valid time values
@@ -114,6 +114,34 @@ def fix_unknown_strings(entity: dict) -> dict:
     }
 
 
+# Valid status values per entity type
+VALID_STATUSES = {
+    "activity": {"completed", "planned", "incomplete"},
+    "machine":  {"used", "planned"},
+    "device":   {"used"},
+    "test":     {"planned", "done"},
+    "intervention": {"active", "completed", "unknown"},
+}
+
+
+def fix_invalid_status(entity: dict) -> tuple:
+    """
+    Remove entities with invalid status values.
+    Returns (entity_or_none, violation_message_or_none)
+    """
+    entity_type = entity.get("type")
+    valid = VALID_STATUSES.get(entity_type)
+    if not valid:
+        return entity, None
+
+    status = entity.get("status")
+    if status and status not in valid:
+        label = entity.get("label", entity.get("metric", "?"))
+        return None, f"Removed [{entity_type}] '{label}': invalid status '{status}' (valid: {sorted(valid)})"
+
+    return entity, None
+
+
 def fix_invalid_time_fields(entity: dict) -> dict:
     """Set relative/invalid time phrases to None."""
     result = dict(entity)
@@ -183,7 +211,10 @@ def fix_measurement_value(entity: dict) -> dict:
     unit = result.get("unit", "") or ""
 
     if value is None:
-        # null value is valid — directional observation captured in notes
+        # null value means no numeric was stated — per extraction rules, this should
+        # not have been extracted. Drop it as a safety net.
+        result["_remove"] = True
+        result["_remove_reason"] = "measurement value is null — directional observations should not be extracted"
         return result
 
     if isinstance(value, str):
@@ -275,15 +306,21 @@ def enforce_schema(entities: list) -> tuple:
         # 2. Fix "unknown" strings → None
         e = fix_unknown_strings(e)
 
-        # 3. Fix invalid time field values
+        # 3. Fix invalid status values — remove entity if status is not in schema
+        e, status_violation = fix_invalid_status(e)
+        if e is None:
+            violations.append(status_violation)
+            continue
+
+        # 4. Fix invalid time field values
         e = fix_invalid_time_fields(e)
 
-        # 4. Fix dose field — vague quantities → null
+        # 5. Fix dose field — vague quantities → null
         e = fix_dose_field(e)
 
-        # 5. Fix measurement values — duration conversion first, then type coercion
-        e = fix_sleep_duration_value(e)  # converts string duration → float
-        e = fix_measurement_value(e)      # coerces remaining strings → float
+        # 6. Fix measurement values — duration conversion first, then type coercion
+        e = fix_sleep_duration_value(e)
+        e = fix_measurement_value(e)
 
         # 5. Remove entities flagged for removal
         if e.pop("_remove", False):

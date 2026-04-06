@@ -92,14 +92,37 @@ For each mention, work through these questions before writing the entity:
    If language is neutral or observational with no hedging → outcome.
 
    OUTCOME REASONING — required before creating any outcome entity:
-   Before structuring an outcome, answer this question internally:
-   "What specific language in the transcript confirms this is an observed
-   pattern rather than speculation?"
-   - If you find clear observational language (no hedging) → outcome
-   - If you cannot find such language, or hedging is present → theory instead
+   Before structuring an outcome, answer these two questions internally:
+
+   1. "What specific language in the transcript confirms this is an observed
+      pattern rather than speculation?"
+      - If you find clear observational language (no hedging) → proceed to question 2
+      - If you cannot find such language, or hedging is present → theory instead
+
+   2. "Is the 'what' field a trackable, measurable construct with a clear baseline?"
+      - Must be something that can be compared over time: nocturia frequency,
+        HRV value, stool consistency, body weight, blood glucose
+      - Must NOT be a vague subjective domain: "language recognition",
+        "mental stuff", "psychological benefits", "cognitive function",
+        "energy", "how I feel overall"
+      - If the construct is not yet defined or measurable → theory instead
+
+   Both questions must pass. If either fails → theory, not outcome.
    This reasoning step is mandatory — do not skip it.
    Provider recommendation not yet acted on → theory or omit
    Equipment issue, procurement note, missed recording → outside
+
+   OUTSIDE SUBTYPE RULE — always fill subtype field:
+   - device_failure: device malfunctioning in a specific documented way that affects
+     how measurements in this note should be interpreted.
+     "Oura has been off by an entire hour" → outside, subtype: device_failure
+     Must be specific and quantified — not general opinion.
+   - procurement: supply issues, logistics, missed deliveries
+     "couldn't get my supplements, forgot to pack them" → procurement
+   - operational: notes addressed to the team, admin, scheduling
+     "we should figure out a system for this" → operational
+   - general: device opinions, general complaints with no specific documented impact
+     "WHOOP sucks", "Eight Sleep is more accurate than Oura" → general
 
    INTERVENTION vs INTAKE — critical distinction:
    An intervention is a multi-session treatment protocol with a defined start and expected end.
@@ -338,6 +361,14 @@ MEAL RULE:
 - Do NOT attempt to parse ingredients, calculate nutrition, or structure food items
 - This layer is not the food system — it only preserves the description for handoff
 
+RAW_TEXT FIELD (outside, context, theory):
+- Keep raw_text short and descriptive — one sentence maximum
+- Summarize what it is about, do not copy the full transcript passage
+- outside: "Eight Sleep vs Oura divergence since PONS therapy" not the full paragraph
+- context: "switched to carbs for easier digestion due to stomach issues" not the full explanation
+- theory: state the core speculation in one sentence
+- NEVER copy more than ~15 words directly from the transcript into raw_text
+
 ─────────────────────────────────────────
 EXAMPLES
 ─────────────────────────────────────────
@@ -416,7 +447,44 @@ Thinking:
 
 Result entities:
 [substanceA took, symptomB symptom, conditionC improvement outcome,
-interventionD context, substanceA/mechanism theory]"""
+interventionD context, substanceA/mechanism theory]
+
+---
+
+EXAMPLE 4 — outcome vs theory: language test + tracked construct test
+Mentions include:
+- selegiline → language recognition improvement, outcome candidate
+- selegiline → caffeine sensitivity increase, outcome candidate
+- nocturia reduction since paracetamol, outcome candidate
+- caffeine mechanism question, theory
+
+Thinking:
+- "definitely starting to feel the upsweep in language recognition as a result of selegiline"
+  Language test: "definitely" → observational. No hedging. Passes test 1.
+  Tracked construct test: "language recognition" — is this measurable with a baseline?
+  No. There is no defined metric, no way to compare over time, no established construct.
+  This is a subjective domain the user perceives but cannot track empirically.
+  → FAILS test 2. Make it theory.
+  theory: raw_text: "selegiline improving language recognition — user's subjective perception",
+  linked_to: selegiline
+
+- "apparently it's made it capable for me to absolutely bomb my brain with caffeine, super sensitive"
+  Language test: "apparently" → hedging signal present.
+  → FAILS test 1. Theory.
+  theory: raw_text: "selegiline may be increasing caffeine sensitivity",
+  linked_to: selegiline
+
+- "paracetamol tends to reduce my nocturia, it's been a trend for years, reduces odds by 50%"
+  Language test: "tends to", "for years", "reduces" → established pattern, no hedging. Passes test 1.
+  Tracked construct test: "nocturia" — tracked across multiple notes, binary occurrence,
+  comparable over time. Passes test 2.
+  → outcome: linked_to: paracetamol, what: nocturia, direction: positive, qualifier: "reduces odds by 50%"
+
+- "is it good for me to use caffeine... is it bad cause it's like messing with the internal process"
+  Question form, speculative → theory.
+
+Result entities:
+[selegiline/language theory, selegiline/caffeine theory, paracetamol/nocturia outcome, caffeine mechanism theory]"""
 
 
 def structure_mentions(mentions: list, normalized_text: str) -> list:

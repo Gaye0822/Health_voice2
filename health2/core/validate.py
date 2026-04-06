@@ -66,6 +66,54 @@ def _check_measurement_metrics(entities: list, transcript: str) -> tuple:
     return clean, removed
 
 
+def _check_outcome_linked_to(entities: list) -> tuple:
+    """
+    Deterministic guard: remove outcome entities whose linked_to
+    does not match any other entity in this note.
+
+    An outcome must be linked to something that actually exists in this note.
+    If linked_to refers to an entity not present → the outcome is likely
+    referencing a past event or hallucinated link.
+    """
+    # Build set of labels from non-outcome entities
+    entity_labels = set()
+    for e in entities:
+        if e.get("type") == "outcome":
+            continue
+        label = e.get("label", e.get("metric", e.get("raw_text", "")))
+        if label:
+            entity_labels.add(label.lower())
+
+    clean = []
+    removed = []
+
+    for entity in entities:
+        if entity.get("type") != "outcome":
+            clean.append(entity)
+            continue
+
+        linked_to = entity.get("linked_to", "")
+        if not linked_to:
+            clean.append(entity)
+            continue
+
+        # Check if linked_to matches any entity label in this note
+        linked_lower = linked_to.lower()
+        found = any(
+            linked_lower in label or label in linked_lower
+            for label in entity_labels
+        )
+
+        if found:
+            clean.append(entity)
+        else:
+            removed.append(
+                f"Removed outcome linked_to '{linked_to}' — no matching entity found in this note"
+            )
+
+    return clean, removed
+
+
 def validate_entities(entities: list, normalized_text: str) -> tuple:
     """
     Stage 3: Validate extracted entities.
@@ -100,6 +148,14 @@ def validate_entities(entities: list, normalized_text: str) -> tuple:
         for v in metric_violations:
             print(f"   → {v}")
     all_changes.extend(metric_violations)
+
+    # ── Step 1c: Outcome linked_to guard ─────────────────────────────────
+    entities, outcome_violations = _check_outcome_linked_to(entities)
+    if outcome_violations:
+        print(f"⚙️  outcome_guard: {len(outcome_violations)} removal(s):")
+        for v in outcome_violations:
+            print(f"   → {v}")
+    all_changes.extend(outcome_violations)
 
     # ── Step 2: Separate protected types — they skip the LLM ─────────────
     protected = [e for e in entities if e.get("type") in PROTECTED_TYPES]
@@ -163,6 +219,10 @@ STRICT LIMITS — DO NOT:
   The only exception is when the KB registry explicitly instructs a type correction.
   "Eel" being a meal, not an intake, is an ontological judgment — do NOT change it.
   If an entity came in as "meal", it must leave as "meal" unless KB says otherwise.
+- Change status field values — this is an ABSOLUTE limit.
+  "incomplete" must stay "incomplete". "completed" must stay "completed".
+  If the transcript says something did not happen → remove the entity entirely, do not change status.
+  NEVER change status to "absent" — this value does not exist in the schema.
 - Remove entities for ontological reasons (EXCEPT when KB removal list says to remove)
 - Add new entities not present in the input — this is an ABSOLUTE limit with no exceptions.
   Even if the transcript mentions something that was not extracted, you must NOT add it.
