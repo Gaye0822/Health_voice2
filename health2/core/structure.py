@@ -112,17 +112,35 @@ For each mention, work through these questions before writing the entity:
    Provider recommendation not yet acted on → theory or omit
    Equipment issue, procurement note, missed recording → outside
 
-   OUTSIDE SUBTYPE RULE — always fill subtype field:
-   - device_failure: device malfunctioning in a specific documented way that affects
-     how measurements in this note should be interpreted.
-     "Oura has been off by an entire hour" → outside, subtype: device_failure
-     Must be specific and quantified — not general opinion.
-   - procurement: supply issues, logistics, missed deliveries
-     "couldn't get my supplements, forgot to pack them" → procurement
-   - operational: notes addressed to the team, admin, scheduling
+   OUTSIDE SUBTYPE RULE — always fill subtype field.
+   First answer: "Is there a specific, documented, quantified malfunction?"
+
+   - device_failure: one device clearly wrong in a concrete, measurable way.
+     The malfunction is specific and quantified — not a matter of interpretation.
+     "Oura has been off by an entire hour — starts recording at midnight when I slept at 10:30" ✅
+     "Polar strap jumping all over the place, no idea what my heart rate was" ✅
+     These are NOT device_failure:
+     "Eight Sleep and Oura diverging since PONS" → two sources disagree → source_discrepancy ❌
+     "resting heart rate has been fixed" → observation about a metric, not a device malfunction ❌
+     "HRV was awful" → subjective commentary ❌
+     "Eight Sleep is more accurate than Oura" → reliability opinion, not confirmed failure ❌
+     When in doubt → source_discrepancy, not device_failure.
+
+   - source_discrepancy: two devices report different values, neither clearly wrong.
+     "Eight Sleep and Oura showing different deep sleep since PONS" → source_discrepancy ✅
+     "WHOOP shows different HRV than Oura" → source_discrepancy ✅
+     These are reliability concerns — not confirmed malfunctions.
+
+   - procurement: supply issues, logistics, missed deliveries, device arrivals.
+     "couldn't get my supplements" → procurement
+     "lactic device delivered, needs calibration" → procurement
+
+   - operational: notes addressed to the team, admin, scheduling, instructions.
      "we should figure out a system for this" → operational
-   - general: device opinions, general complaints with no specific documented impact
-     "WHOOP sucks", "Eight Sleep is more accurate than Oura" → general
+     "teach me how to calibrate it" → operational
+
+   - general: device opinions, general complaints with no specific documented impact.
+     "WHOOP sucks" → general
 
    INTERVENTION vs INTAKE — critical distinction:
    An intervention is a multi-session treatment protocol with a defined start and expected end.
@@ -298,6 +316,17 @@ MERGE RULE:
   Use the most specific label. Put additional detail in qualifier field.
   Do NOT create separate entities for different aspects of the same finding.
 
+- OUTSIDE MERGE RULE: multiple outside mentions about the same device or topic → ONE entity.
+  Use the most informative raw_text as the primary description.
+  Put additional detail, recommendations, or follow-up in the notes field.
+  Do NOT create separate outside entities for each sentence about the same issue.
+  Examples:
+  "Oura off by an hour" + "Oura data is garbage" + "use Loop instead"
+  → ONE outside entity: raw_text: "Oura off by 1-1.5 hours", subtype: device_failure,
+    notes: "recommends using Loop instead"
+  "WHOOP shows different HRV" + "WHOOP has always been unreliable"
+  → ONE outside entity: raw_text: "WHOOP vs Oura HRV discrepancy", subtype: source_discrepancy
+
   NEVER merge mentions of different candidate_types even if they share the same label.
   "paracetamol" as intake + "paracetamol reduces nocturia" as outcome → TWO separate entities.
   An intake and an outcome about the same substance are fundamentally different records.
@@ -368,6 +397,13 @@ RAW_TEXT FIELD (outside, context, theory):
 - context: "switched to carbs for easier digestion due to stomach issues" not the full explanation
 - theory: state the core speculation in one sentence
 - NEVER copy more than ~15 words directly from the transcript into raw_text
+
+CONTEXT ENTITY RULE:
+Before creating a context entity, answer both:
+1. Is this information necessary to understand another entity in this note?
+2. Which specific entity does this explain? → fill related_to with that entity's label.
+If related_to cannot be filled → do NOT create a context entity. Route to outside or omit.
+A context entity with related_to: null is invalid — omit it.
 
 ─────────────────────────────────────────
 EXAMPLES

@@ -38,6 +38,7 @@ CandidateType = Literal[
     "outcome",
     "theory",
     "outside",
+    "context",
     "other"
 ]
 
@@ -193,12 +194,13 @@ class TheoryEntity(BaseModel):
     linked_to_type: Optional[str] = None
 
 
-OutsideSubtype = Literal["device_failure", "procurement", "operational", "general"]
+OutsideSubtype = Literal["device_failure", "source_discrepancy", "procurement", "operational", "general"]
 
 class OutsideEntity(BaseModel):
     type: Literal["outside"]
     raw_text: str
     subtype: Optional[OutsideSubtype] = None  # device_failure: unreliable source/sensor issue
+    notes: Optional[str] = None  # additional context, related recommendations, or follow-up
 
 
 # ─────────────────────────────────────────
@@ -305,7 +307,7 @@ ENTITY_SCHEMAS = {
         "fields": ["raw_text", "linked_to_label", "linked_to_type"]
     },
     "outside": {
-        "fields": ["raw_text", "subtype"],
-        "subtypes": ["device_failure", "procurement", "operational", "general"]
+        "fields": ["raw_text", "subtype", "notes"],
+        "subtypes": ["device_failure", "source_discrepancy", "procurement", "operational", "general"]
     }
 }

@@ -69,20 +69,23 @@ def _check_measurement_metrics(entities: list, transcript: str) -> tuple:
 def _check_outcome_linked_to(entities: list) -> tuple:
     """
     Deterministic guard: remove outcome entities whose linked_to
-    does not match any other entity in this note.
+    does not match any other entity in this note, or is linked to
+    a symptom/context/theory (invalid cause types).
 
-    An outcome must be linked to something that actually exists in this note.
-    If linked_to refers to an entity not present → the outcome is likely
-    referencing a past event or hallucinated link.
+    An outcome must be linked to something the user did or took:
+    intake, activity, machine, or intervention.
     """
-    # Build set of labels from non-outcome entities
-    entity_labels = set()
+    # Valid cause types for outcome linked_to
+    VALID_CAUSE_TYPES = {"intake", "activity", "machine", "intervention"}
+
+    # Build map of label → type from non-outcome entities
+    entity_label_types = {}
     for e in entities:
         if e.get("type") == "outcome":
             continue
         label = e.get("label", e.get("metric", e.get("raw_text", "")))
         if label:
-            entity_labels.add(label.lower())
+            entity_label_types[label.lower()] = e.get("type", "")
 
     clean = []
     removed = []
@@ -93,23 +96,34 @@ def _check_outcome_linked_to(entities: list) -> tuple:
             continue
 
         linked_to = entity.get("linked_to", "")
+
+        # No linked_to → omit
         if not linked_to:
-            clean.append(entity)
+            removed.append(
+                f"Removed outcome with no linked_to — an outcome without a cause is not an outcome"
+            )
             continue
 
-        # Check if linked_to matches any entity label in this note
         linked_lower = linked_to.lower()
-        found = any(
-            linked_lower in label or label in linked_lower
-            for label in entity_labels
-        )
 
-        if found:
-            clean.append(entity)
-        else:
+        # Find matching entity
+        matched_type = None
+        for label, etype in entity_label_types.items():
+            if linked_lower in label or label in linked_lower:
+                matched_type = etype
+                break
+
+        if matched_type is None:
             removed.append(
                 f"Removed outcome linked_to '{linked_to}' — no matching entity found in this note"
             )
+        elif matched_type not in VALID_CAUSE_TYPES:
+            removed.append(
+                f"Removed outcome linked_to '{linked_to}' — linked to {matched_type}, "
+                f"must be intake/activity/machine/intervention"
+            )
+        else:
+            clean.append(entity)
 
     return clean, removed
 

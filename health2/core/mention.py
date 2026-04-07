@@ -15,7 +15,7 @@ except ImportError:
 
 CANDIDATE_TYPES = [
     "intake", "symptom", "activity", "machine", "device",
-    "measurement", "meal", "outcome", "theory", "outside", "other"
+    "measurement", "meal", "outcome", "theory", "outside", "context", "other"
 ]
 
 
@@ -331,6 +331,13 @@ meal
   The spoken food description will be preserved as a handoff field for the downstream food system.
   Do not attempt to parse or structure the food content here — just extract the meal event.
 
+  FASTING RULE:
+  Fasting is not an activity and not an intake — it is context.
+  "I fasted until 2:30 PM", "still fasted this morning", "fasting day" → context, related_to: meal timing
+  Do NOT extract fasting as activity, intake, or any other event type.
+  Exception: if the user describes a structured fasting protocol as a multi-day intervention
+  ("I'm doing a 3-day water fast") → intervention.
+
 theory
   The user's own speculation, causal explanation, or personal interpretation
   about their OWN body or health.
@@ -375,17 +382,58 @@ outside
   the team or another person, meta-commentary about the system itself.
   Not a health event.
 
+  OUTSIDE IS ONLY FOR THINGS EXTERNAL TO THE USER'S BODY.
+  If something is about the user's own body or health — even if it cannot be
+  extracted as a symptom, intake, or any other type — it is NOT outside.
+  Omit it entirely rather than routing it to outside.
+
+  outside is NOT a catch-all or fallback category. Do not use it for:
+  - General health feelings or states ("exhaustion pattern", "feeling off")
+  - User's speculation about their own body → theory
+  - Vague health observations that don't fit other types → omit
+
   ALWAYS extract as outside when:
-  - User describes a device malfunctioning in a specific, quantified way
-    "Oura starts recording sleep at midnight when I fell asleep at 10:30" → outside ✅
-    "there's been a massive divergence between Eight Sleep and Oura since PONS" → outside ✅
-    Even if the user does not explicitly label it a problem — if it describes a
-    specific device failure or divergence, extract it.
+  - User describes a device malfunctioning or two devices disagreeing
   - User addresses the team, another person, or the system
   - User mentions procurement, logistics, or operational matters
 
+  DEVICE_FAILURE vs SOURCE_DISCREPANCY — answer this before assigning subtype:
+  "Is there a specific, documented, quantified malfunction?"
+
+  device_failure: one device is clearly wrong in a concrete, measurable way.
+    "Oura starts recording sleep at midnight when I fell asleep at 10:30" → device_failure ✅
+    "Polar strap jumping all over the place, no heart rate reading at all" → device_failure ✅
+    The malfunction is specific and quantified — not a matter of interpretation.
+
+  source_discrepancy: two devices report different values but neither is clearly wrong.
+    "Eight Sleep and Oura showing different deep sleep since PONS" → source_discrepancy ✅
+    "WHOOP shows different HRV than Oura" → source_discrepancy ✅
+    "Eight Sleep more accurate than Oura in my experience" → source_discrepancy ✅
+    These are reliability concerns or disagreements — not confirmed failures.
+
+  When in doubt → source_discrepancy, not device_failure.
+
   Do NOT omit device issues just because they are not about the user's body.
   That is exactly why they are outside — they are about the external world.
+
+context
+  Background information necessary to understand another entity in this note.
+
+  Before extracting as context, answer BOTH questions:
+  1. "This information is necessary to understand another entity in this note."
+     If yes → context candidate. If no → outside or omit.
+  2. "Which specific entity in this note does this explain?"
+     If you can identify a specific entity → related_to can be filled → context ✅
+     If you cannot identify a specific entity → NOT context. Route to outside or omit.
+
+  A context mention with no identifiable related_to is not context.
+
+  Examples:
+  "Switched to carbs because stomach is a mess" → explains abdominal pain entity → context ✅
+  "Fasted until 2:30 PM" → explains meal timing → context ✅
+  "Lactic device delivered, needs calibration" → which entity does this explain? None → outside ❌
+  "Resting heart rate has been fixed" → which entity does this explain? None in this note → omit ❌
+  "Caught this from Yuki" → explains illness context → context ✅
 
 other
   Health-relevant but does not fit the above.
@@ -439,18 +487,44 @@ For each mention, answer these questions in the reasoning field:
 1. Did this actually happen, or is it a plan, recommendation, or reference?
 2. Is this about the user's own body or actions?
 3. Is the label specific and resolvable enough to track over time?
-4. For symptoms — complete this sentence first:
+4. For symptoms — apply these elimination filters FIRST, before anything else:
+
+   FILTER 1 — GENERAL ENERGY/FATIGUE/SLEEP STATES:
+   Is this primarily about energy level, tiredness, general weakness, or sleep-related alertness?
+   These are states, not symptoms — omit regardless of how they are phrased:
+
+   Low energy states:
+   "exhausted", "drained", "worn out", "no energy", "fatigued", "weak",
+   "every day more tired", "feeling wiped out", "running on empty"
+
+   Sleep difficulty and unexpected wakefulness:
+   Any statement about being unexpectedly awake or alert at a time the user intended to sleep.
+   "wide awake at 10 PM", "can't sleep", "wired at night", "just couldn't shut down",
+   "totally awake", "eyes wide open at midnight", "couldn't fall asleep"
+   These are sleep difficulty observations — never a symptom in this system.
+
+   If the finding is about general energy, fatigue, or sleep-related alertness
+   without a specific localized or physiological finding → OMIT. Do not proceed to sentence test.
+
+   FILTER 2 — USER SELF-DISMISSAL:
+   Did the user dismiss or negate symptoms in this same note?
+   "no symptoms", "no other symptoms", "probably nothing", "just tired",
+   "don't feel sick", "nothing really wrong"
+   If yes → OMIT any vague symptom claims from this note regardless of other language.
+   A user who says "no symptoms" and then says "I feel weak" is not reporting a symptom.
+
+   Only if both filters pass → complete this sentence:
    "This is a named clinical finding that exists independently of any activity or
    context, and the user is actively reporting it as a current problem."
    If the sentence feels natural and true → proceed to extract as symptom.
    If it feels forced → omit or route elsewhere.
 
    Examples:
-   "Shivering all night from cold room" → independent, active complaint ✅ → symptom
-   "Cold sensation after cold plunge" → not independent, activity after-effect ❌ → omit
-   "Increased caffeine sensitivity" → not a named clinical finding ❌ → omit or theory
-   "Strength loss during workout" → performance observation, not independent ❌ → omit
-   "Blepharitis, eyes can barely open" → named condition, active complaint ✅ → symptom
+   "Every day more exhausted, feel sick and weak, no symptoms" → Filter 1 + Filter 2 both trigger → OMIT
+   "Shivering all night from cold room" → passes both filters, independent, active complaint ✅ → symptom
+   "Cold sensation after cold plunge" → passes filters but not independent ❌ → omit
+   "Increased caffeine sensitivity" → Filter 1 triggers (general state) ❌ → omit
+   "Blepharitis, eyes can barely open" → passes both filters, named condition ✅ → symptom
 
    Then confirm:
    - Is the user currently experiencing this, or referencing/dismissing it?
@@ -504,7 +578,12 @@ For each mention, answer these questions in the reasoning field:
       If the construct is not measurable → theory, not outcome
    c. Is the "what" something the device pipeline already tracks automatically?
       "deep sleep", "HRV", "heart rate", "sleep score", "SpO2" → device-tracked → omit
-   All three must pass. If any fails → theory or omit.
+   d. Can you fill [linked_to] with a specific cause from this note?
+      linked_to must be an intake, activity, machine, or intervention in this note.
+      If no specific cause is identifiable → omit. An outcome without a cause is not an outcome.
+      "Slightly better this morning" with no stated cause → omit.
+      linked_to cannot be a symptom, context, or theory — only something the user did or took.
+   All four must pass. If any fails → theory or omit.
 7. What is the temporal evidence, assessed from this mention's own context only?
 
 Example reasoning for a symptom that should be omitted:

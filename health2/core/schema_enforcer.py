@@ -33,7 +33,7 @@ SCHEMA_FIELDS = {
     "test":         {"type", "label", "time", "status", "result", "notes"},
     "context":      {"type", "raw_text", "related_to"},
     "theory":       {"type", "raw_text", "linked_to_label", "linked_to_type"},
-    "outside":      {"type", "raw_text", "subtype"},
+    "outside":      {"type", "raw_text", "subtype", "notes"},
 }
 
 # Relative phrases that are not valid time values
