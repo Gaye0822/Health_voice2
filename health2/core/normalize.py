@@ -28,19 +28,37 @@ def normalize_transcript(raw_text: str) -> dict:
     """
     Normalizes a voice note transcript.
 
+    Pipeline:
+    1. Deterministik pre-normalizasyon — bilinen hataları Python'da düzelt
+    2. LLM normalizasyon — geri kalanı ve belirsizlikleri halleder
+
     Returns:
     {
         "normalized_text": str,
-        "low_confidence_segments": [
-            {
-                "original": str,
-                "suggested": str or null,
-                "context": str,
-                "reason": str
-            }
-        ]
+        "low_confidence_segments": [...]
     }
     """
+    # ── Step 1: Deterministik pre-normalizasyon ───────────────────────────────
+    try:
+        from core.pre_normalize import apply_deterministic_corrections
+    except ImportError:
+        try:
+            from pre_normalize import apply_deterministic_corrections
+        except ImportError:
+            apply_deterministic_corrections = None
+
+    pre_result = None
+    if apply_deterministic_corrections:
+        pre_result = apply_deterministic_corrections(raw_text)
+        working_text = pre_result["text"]
+        if pre_result["applied"]:
+            print(f"⚙️  pre_normalize: {len(pre_result['applied'])} correction(s) applied:")
+            for a in pre_result["applied"]:
+                print(f"   → {a}")
+    else:
+        working_text = raw_text
+
+    # ── Step 2: LLM normalizasyon ─────────────────────────────────────────────
     knowledge_context = _get_knowledge_context()
     kb_section = f"\n\n{knowledge_context}" if knowledge_context else ""
 
@@ -109,7 +127,7 @@ If there are no uncertain terms, return an empty list for low_confidence_segment
         temperature=0,
         system=system_prompt,
         messages=[
-            {"role": "user", "content": raw_text}
+            {"role": "user", "content": working_text}
         ]
     )
 
@@ -123,13 +141,33 @@ If there are no uncertain terms, return an empty list for low_confidence_segment
 
     try:
         result = json.loads(raw)
+        llm_low_conf = result.get("low_confidence_segments", [])
+
+        # Filter out segments already handled by pre_normalize
+        # If pre_normalize already applied a correction, don't ask user again
+        pre_applied_originals = set()
+        if pre_result:
+            for applied_msg in pre_result["applied"]:
+                # Extract original term from log message: '"original" → "corrected" ...'
+                if applied_msg.startswith('"'):
+                    original_term = applied_msg.split('"')[1].lower()
+                    pre_applied_originals.add(original_term)
+
+        filtered_llm_low_conf = [
+            seg for seg in llm_low_conf
+            if seg.get("original", "").lower() not in pre_applied_originals
+        ]
+
+        pre_flagged = pre_result["flagged"] if pre_result else []
+        all_low_conf = pre_flagged + filtered_llm_low_conf
+
         return {
-            "normalized_text": result.get("normalized_text", raw_text),
-            "low_confidence_segments": result.get("low_confidence_segments", [])
+            "normalized_text": result.get("normalized_text", working_text),
+            "low_confidence_segments": all_low_conf
         }
     except json.JSONDecodeError:
         print("⚠️ normalize_transcript JSON parse error")
         return {
-            "normalized_text": raw_text,
-            "low_confidence_segments": []
+            "normalized_text": working_text,
+            "low_confidence_segments": pre_result["flagged"] if pre_result else []
         }

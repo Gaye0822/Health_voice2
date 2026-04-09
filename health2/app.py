@@ -165,16 +165,20 @@ elif st.session_state.step == "review_transcript":
 
                 with col1:
                     if suggested and st.button(f"✅ Use **{suggested}**", key=f"accept_{i}", use_container_width=True):
-                        # Apply correction directly to edited text
                         st.session_state.edited = st.session_state.edited.replace(original, suggested, 1)
                         st.session_state.normalized = st.session_state.edited
-                        save_correction(
+                        found_in_kb = save_correction(
                             original=original,
                             corrected=suggested,
                             correction_type="normalization",
                             context_hint=context
                         )
                         low_conf[i]["_resolved"] = True
+                        if not found_in_kb:
+                            st.session_state["kb_prompt"] = {
+                                "original": original,
+                                "corrected": suggested
+                            }
                         st.toast(f"✅ Applied: '{original}' → '{suggested}'")
                         st.rerun()
 
@@ -198,13 +202,18 @@ elif st.session_state.step == "review_transcript":
                             if custom:
                                 st.session_state.edited = st.session_state.edited.replace(original, custom, 1)
                                 st.session_state.normalized = st.session_state.edited
-                                save_correction(
+                                found_in_kb = save_correction(
                                     original=original,
                                     corrected=custom,
                                     correction_type="normalization",
                                     context_hint=context
                                 )
                                 low_conf[i]["_resolved"] = True
+                                if not found_in_kb:
+                                    st.session_state["kb_prompt"] = {
+                                        "original": original,
+                                        "corrected": custom
+                                    }
                                 st.toast(f"✅ Applied: '{original}' → '{custom}'")
                                 st.rerun()
 
@@ -228,6 +237,37 @@ elif st.session_state.step == "review_transcript":
                             st.rerun()
 
         st.divider()
+
+    # ── KB Registry prompt ────────────────────────────────────────────
+    if st.session_state.get("kb_prompt"):
+        kb_data = st.session_state["kb_prompt"]
+        st.warning(f"**'{kb_data['corrected']}'** is not in the KB registry yet. Add it?")
+        kb_col1, kb_col2, kb_col3 = st.columns([2, 2, 1])
+        with kb_col1:
+            kb_entity_type = st.selectbox(
+                "Entity type",
+                CANDIDATE_TYPES,
+                key="kb_entity_type_global",
+                label_visibility="collapsed"
+            )
+        with kb_col2:
+            if st.button("➕ Add to KB", key="kb_add_global", use_container_width=True):
+                from core.db import save_knowledge
+                save_knowledge(
+                    original_text=kb_data["corrected"],
+                    correction_type="registry",
+                    corrected_value=kb_entity_type,
+                    reason="Added from normalization correction",
+                    example_before={"aliases": [kb_data["original"]]},
+                    example_after={"subtype": "", "description": ""}
+                )
+                del st.session_state["kb_prompt"]
+                st.toast(f"✅ '{kb_data['corrected']}' added to KB as {kb_entity_type}")
+                st.rerun()
+        with kb_col3:
+            if st.button("Skip", key="kb_skip_global", use_container_width=True):
+                del st.session_state["kb_prompt"]
+                st.rerun()
 
     # ── Pending flags summary ─────────────────────────────────────────
     if st.session_state.pending_flags:
@@ -495,43 +535,6 @@ elif st.session_state.step == "review_entities":
 elif st.session_state.step == "done":
     st.header("✅ Done!")
     st.success(f"Saved. Transcript ID: {st.session_state.transcript_id}")
-
-    # ── RAG export ────────────────────────────────────────────────────────
-    if st.button("💾 Save as RAG Example", use_container_width=True):
-        import os, json
-        from datetime import datetime
-
-        rag_dir = os.path.join(os.path.dirname(__file__), "rag_store")
-        os.makedirs(rag_dir, exist_ok=True)
-
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        filename = f"{timestamp}_transcript_{st.session_state.transcript_id}.txt"
-        filepath = os.path.join(rag_dir, filename)
-
-        lines = []
-        lines.append("=== TRANSCRIPT ===")
-        lines.append(st.session_state.transcript or "")
-        lines.append("")
-        lines.append("=== NORMALIZED ===")
-        lines.append(st.session_state.normalized or "")
-        lines.append("")
-        lines.append("=== MENTIONS + REASONING ===")
-        for m in (st.session_state.mentions or []):
-            lines.append(f"[{m.get('candidate_type','?')}] {m.get('raw_mention','')}")
-            lines.append(f"  temporal: {m.get('temporal_evidence','')}")
-            lines.append(f"  reasoning: {m.get('reasoning','')}")
-            lines.append("")
-        lines.append("=== ENTITIES (APPROVED) ===")
-        lines.append(json.dumps(st.session_state.entities, indent=2, ensure_ascii=False))
-        lines.append("")
-        lines.append("=== METADATA ===")
-        lines.append(f"approved_at: {datetime.now().isoformat()}")
-        lines.append(f"transcript_id: {st.session_state.transcript_id}")
-
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines))
-
-        st.toast(f"✅ Saved to rag_store/{filename}")
 
     if st.button("Process Another Note", type="primary"):
         for key in defaults:

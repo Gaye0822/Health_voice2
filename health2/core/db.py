@@ -50,34 +50,76 @@ def get_corrections_as_text() -> str:
     return "\nKnown corrections (apply only when context matches):\n" + "\n".join(lines)
 
 
-def save_correction(original: str, corrected: str, correction_type: str = "normalization", context_hint: str = None):
-    """Save a Whisper normalization correction."""
+def save_correction(original: str, corrected: str, correction_type: str = "normalization", context_hint: str = None) -> bool:
+    """
+    Save a Whisper normalization correction.
+
+    Also syncs the original term as an alias to KB registry IF the corrected
+    term already exists there. If not in KB, does NOT create a new entry —
+    the UI will ask the user whether to add it.
+
+    Returns True if corrected term was found in KB (alias added),
+    False if not found in KB (UI should offer to add).
+    """
     if not original or not corrected:
-        return
+        return False
     if original.strip() == corrected.strip():
-        return
+        return False
+
     conn = get_db_connection()
     cur = conn.cursor()
+    found_in_kb = False
+
     try:
+        # ── Save to corrections table ──────────────────────────────────────────
         cur.execute(
             "SELECT id FROM corrections WHERE original_text = %s AND corrected_text = %s",
             (original, corrected)
         )
-        if cur.fetchone():
-            return
-        cur.execute(
-            """INSERT INTO corrections
-               (original_text, corrected_text, correction_type, is_normalization, context_hint)
-               VALUES (%s, %s, %s, TRUE, %s)""",
-            (original, corrected, correction_type, context_hint)
-        )
-        conn.commit()
+        if not cur.fetchone():
+            cur.execute(
+                """INSERT INTO corrections
+                   (original_text, corrected_text, correction_type, is_normalization, context_hint)
+                   VALUES (%s, %s, %s, TRUE, %s)""",
+                (original, corrected, correction_type, context_hint)
+            )
+            conn.commit()
+
+        # ── Sync alias to KB registry only if entry already exists ────────────
+        if correction_type == "normalization":
+            cur.execute(
+                """SELECT id, example_before FROM knowledge_base
+                   WHERE correction_type = 'registry'
+                   AND LOWER(original_text) = LOWER(%s)""",
+                (corrected,)
+            )
+            existing = cur.fetchone()
+
+            if existing:
+                found_in_kb = True
+                entry_id = existing[0]
+                before_json = existing[1] if existing[1] else {}
+                aliases = before_json.get("aliases", [])
+                if original not in aliases and original.lower() not in [a.lower() for a in aliases]:
+                    aliases.append(original)
+                    cur.execute(
+                        """UPDATE knowledge_base
+                           SET example_before = %s
+                           WHERE id = %s""",
+                        (json.dumps({"aliases": aliases}), entry_id)
+                    )
+                    conn.commit()
+                    print(f"⚙️  KB registry: added alias '{original}' → '{corrected}'")
+            # If not in KB → don't create, UI will ask
+
     except Exception as e:
         print(f"⚠️ save_correction error: {e}")
         conn.rollback()
     finally:
         cur.close()
         conn.close()
+
+    return found_in_kb
 
 
 # ─────────────────────────────────────────

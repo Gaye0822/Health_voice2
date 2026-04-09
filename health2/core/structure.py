@@ -316,6 +316,14 @@ MERGE RULE:
   Use the most specific label. Put additional detail in qualifier field.
   Do NOT create separate entities for different aspects of the same finding.
 
+- ONSEN / COLD PLUNGE RULE: always extract as separate entities, never merge.
+  Even when mentioned together ("onsen and cold plunge", "onsen cold plunge session"),
+  these are two distinct activities — create one entity for each.
+  If the user did multiple sessions of the same type (e.g. two cold plunges),
+  create separate entities for each with different timing in notes.
+  "two cycles of onsen cold plunge" → onsen (entity 1) + cold plunge (entity 2),
+  notes: "two cycles, alternated"
+
 - OUTSIDE MERGE RULE: multiple outside mentions about the same device or topic → ONE entity.
   Use the most informative raw_text as the primary description.
   Put additional detail, recommendations, or follow-up in the notes field.
@@ -548,7 +556,7 @@ def structure_mentions(mentions: list, normalized_text: str) -> list:
 
     response = client.messages.create(
         model="claude-sonnet-4-20250514",
-        max_tokens=4000,
+        max_tokens=6000,
         temperature=0,
         system=SYSTEM_PROMPT,
         tools=[STRUCTURE_TOOL],

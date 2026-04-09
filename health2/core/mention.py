@@ -480,60 +480,80 @@ but temporal_evidence should reflect when it actually happened, not when it was 
 REASONING FIELD — REQUIRED FOR EVERY MENTION
 ─────────────────────────────────────────
 
-For every mention you extract, you must fill the reasoning field.
-This is your chain of thought — write it before finalising the candidate_type.
+For every mention, the reasoning field MUST follow this structured checklist format.
+Work through each step in order. Do not skip steps. The final type must follow from the checklist.
 
-For each mention, answer these questions in the reasoning field:
-1. Did this actually happen, or is it a plan, recommendation, or reference?
-2. Is this about the user's own body or actions?
-3. Is the label specific and resolvable enough to track over time?
-4. For symptoms — apply these elimination filters FIRST, before anything else:
+STEP 1 — ELIMINATE outcome:
+Answer all three:
+- Is this about workout performance (strength, endurance, speed, fitness)? → If yes: OMIT
+- Is this about a device-tracked metric (HRV, sleep, heart rate, SpO2)? → If yes: OMIT
+- Can I complete "Because of [X], [Y] has changed and this is an established fact"
+  with a specific X from this note? → If no: OMIT or theory
 
-   FILTER 1 — GENERAL ENERGY/FATIGUE/SLEEP STATES:
-   Is this primarily about energy level, tiredness, general weakness, or sleep-related alertness?
-   These are states, not symptoms — omit regardless of how they are phrased:
+If outcome survives step 1 → proceed to step 2 outcome tests (language, construct, device, linked_to).
+If eliminated → note why and continue to next step.
 
-   Low energy states:
-   "exhausted", "drained", "worn out", "no energy", "fatigued", "weak",
-   "every day more tired", "feeling wiped out", "running on empty"
+STEP 2 — ELIMINATE symptom:
+Answer all:
+- Is this general energy, fatigue, weakness, or sleep difficulty? → If yes: OMIT
+- Did the user explicitly dismiss this? → If yes: OMIT
+- Is this an expected after-effect of an activity? → If yes: OMIT (activity notes)
+- Is this a named clinical finding the user is actively reporting as a problem? → If no: OMIT
 
-   Sleep difficulty and unexpected wakefulness:
-   Any statement about being unexpectedly awake or alert at a time the user intended to sleep.
-   "wide awake at 10 PM", "can't sleep", "wired at night", "just couldn't shut down",
-   "totally awake", "eyes wide open at midnight", "couldn't fall asleep"
-   These are sleep difficulty observations — never a symptom in this system.
+If symptom survives step 2 → extract as symptom.
+If eliminated → note why and continue.
 
-   If the finding is about general energy, fatigue, or sleep-related alertness
-   without a specific localized or physiological finding → OMIT. Do not proceed to sentence test.
+STEP 3 — ELIMINATE theory:
+- Did the user make an explicit speculative claim in their own words? → If no: OMIT
+- Is this confusion, hope, dismissal, or emotional reaction? → If yes: OMIT
+- Is this about the user's own body/health? → If no: outside
 
-   FILTER 2 — USER SELF-DISMISSAL:
-   Did the user dismiss or negate symptoms in this same note?
-   "no symptoms", "no other symptoms", "probably nothing", "just tired",
-   "don't feel sick", "nothing really wrong"
-   If yes → OMIT any vague symptom claims from this note regardless of other language.
-   A user who says "no symptoms" and then says "I feel weak" is not reporting a symptom.
+If theory survives step 3 → extract as theory.
 
-   Only if both filters pass → complete this sentence:
-   "This is a named clinical finding that exists independently of any activity or
-   context, and the user is actively reporting it as a current problem."
-   If the sentence feels natural and true → proceed to extract as symptom.
-   If it feels forced → omit or route elsewhere.
+STEP 4 — ASSIGN final type:
+State: "Final type: [type] because [one sentence reason]"
+If none of the above fit → omit entirely.
 
-   Examples:
-   "Every day more exhausted, feel sick and weak, no symptoms" → Filter 1 + Filter 2 both trigger → OMIT
-   "Shivering all night from cold room" → passes both filters, independent, active complaint ✅ → symptom
-   "Cold sensation after cold plunge" → passes filters but not independent ❌ → omit
-   "Increased caffeine sensitivity" → Filter 1 triggers (general state) ❌ → omit
-   "Blepharitis, eyes can barely open" → passes both filters, named condition ✅ → symptom
+─────────────────────────────────────────
+CHECKLIST EXAMPLES
+─────────────────────────────────────────
 
-   Then confirm:
-   - Is the user currently experiencing this, or referencing/dismissing it?
-   - Did the user say "probably nothing", "not really", "not necessarily"?
-   - Is this an expected after-effect of an activity?
-   - Is this a vague subjective state rather than a named clinical finding?
+"lost a ton of strength after weeks of illness"
+Step 1 eliminate outcome: workout performance domain → OMIT. Do not extract.
+Final type: omit — subjective workout performance in empirically tracked domain.
+
+"stool is a complete disaster"
+Step 1 eliminate outcome: not performance or device metric, no linked_to cause → not outcome.
+Step 2 eliminate symptom: named clinical finding? Yes — stool consistency is gut-tracked. Active report? Yes. Not dismissed. Not after-effect. → symptom ✅
+Final type: symptom — stool consistency, actively reported gut health finding.
+
+"I think I've got a second bug"
+Step 1: not outcome.
+Step 2: not a named clinical finding, it's speculation → not symptom.
+Step 3: explicit speculation "I'm still pretty sure" about own body → theory ✅
+Final type: theory — user speculates about second infection.
+
+"I've been exhausted for days"
+Step 1: not outcome.
+Step 2: general fatigue/energy state → Filter 1 triggers → OMIT.
+Final type: omit — general energy state, not a clinical finding.
+
+"keep waking up super early"
+Step 1: not outcome.
+Step 2: sleep difficulty → never a symptom in this system → OMIT.
+Final type: omit — sleep difficulty observation.
+
+─────────────────────────────────────────
+ADDITIONAL RULES
+─────────────────────────────────────────
+
+4. For symptoms — after checklist, confirm:
+   - Is this an expected after-effect of an activity? → omit
+   - Is this vague subjective state rather than named clinical finding? → omit
 
 5. For intake: is the substance specifically named, or is it a vague group label?
    Is there same-session confirmation it was taken today, or is this active_regimen/speculation?
+
 6. For theory candidates — complete this sentence first:
    "The user is speculating about their OWN body or health in THIS note."
    If the sentence feels natural and true → extract as theory.
@@ -889,7 +909,7 @@ def extract_mentions(normalized_text: str) -> list:
 
     response = client.messages.create(
         model="claude-sonnet-4-20250514",
-        max_tokens=2000,
+        max_tokens=4000,
         temperature=0,
         system=system,
         tools=[MENTION_TOOL],
