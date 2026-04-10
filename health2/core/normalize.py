@@ -144,19 +144,29 @@ If there are no uncertain terms, return an empty list for low_confidence_segment
         llm_low_conf = result.get("low_confidence_segments", [])
 
         # Filter out segments already handled by pre_normalize
-        # If pre_normalize already applied a correction, don't ask user again
         pre_applied_originals = set()
+        pre_applied_corrected = set()
         if pre_result:
             for applied_msg in pre_result["applied"]:
-                # Extract original term from log message: '"original" → "corrected" ...'
                 if applied_msg.startswith('"'):
-                    original_term = applied_msg.split('"')[1].lower()
-                    pre_applied_originals.add(original_term)
+                    parts = applied_msg.split('"')
+                    if len(parts) >= 4:
+                        original_term = parts[1].lower()
+                        corrected_term = parts[3].lower()
+                        pre_applied_originals.add(original_term)
+                        pre_applied_corrected.add(corrected_term)
+
+        print(f"⚙️  normalize filter: pre_applied={pre_applied_originals}")
+        print(f"⚙️  normalize filter: pre_corrected={pre_applied_corrected}")
+        print(f"⚙️  normalize filter: llm flagged={[s.get('original') for s in llm_low_conf]}")
 
         filtered_llm_low_conf = [
             seg for seg in llm_low_conf
             if seg.get("original", "").lower() not in pre_applied_originals
+            and seg.get("original", "").lower() not in pre_applied_corrected
         ]
+
+        print(f"⚙️  normalize filter: after filter={[s.get('original') for s in filtered_llm_low_conf]}")
 
         pre_flagged = pre_result["flagged"] if pre_result else []
         all_low_conf = pre_flagged + filtered_llm_low_conf

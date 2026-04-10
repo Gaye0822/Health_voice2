@@ -53,13 +53,9 @@ def get_corrections_as_text() -> str:
 def save_correction(original: str, corrected: str, correction_type: str = "normalization", context_hint: str = None) -> bool:
     """
     Save a Whisper normalization correction.
-
-    Also syncs the original term as an alias to KB registry IF the corrected
-    term already exists there. If not in KB, does NOT create a new entry —
-    the UI will ask the user whether to add it.
-
-    Returns True if corrected term was found in KB (alias added),
-    False if not found in KB (UI should offer to add).
+    If corrected term exists in KB registry → adds original as alias automatically.
+    If not in KB → returns False so UI can ask user to add it.
+    Returns True if found in KB, False if not.
     """
     if not original or not corrected:
         return False
@@ -99,18 +95,19 @@ def save_correction(original: str, corrected: str, correction_type: str = "norma
                 found_in_kb = True
                 entry_id = existing[0]
                 before_json = existing[1] if existing[1] else {}
-                aliases = before_json.get("aliases", [])
-                if original not in aliases and original.lower() not in [a.lower() for a in aliases]:
-                    aliases.append(original)
+                mishearings = before_json.get("mishearings", [])
+                if original not in mishearings and original.lower() not in [m.lower() for m in mishearings]:
+                    mishearings.append(original)
                     cur.execute(
                         """UPDATE knowledge_base
                            SET example_before = %s
                            WHERE id = %s""",
-                        (json.dumps({"aliases": aliases}), entry_id)
+                        (json.dumps({**before_json, "mishearings": mishearings}), entry_id)
                     )
                     conn.commit()
-                    print(f"⚙️  KB registry: added alias '{original}' → '{corrected}'")
-            # If not in KB → don't create, UI will ask
+                    print(f"⚙️  KB registry: added mishearing '{original}' → '{corrected}'")
+                else:
+                    found_in_kb = True  # already in KB, no need to ask
 
     except Exception as e:
         print(f"⚠️ save_correction error: {e}")
@@ -254,15 +251,21 @@ def get_knowledge_for_prompt() -> str:
         before = before_json if before_json else {}
         after = after_json if after_json else {}
         aliases = before.get("aliases", [])
+        mishearings = before.get("mishearings", [])
         subtype = after.get("subtype", "")
         description = after.get("description", "")
+        note = after.get("note", "")
         line = f"- {canonical} → entity_type: {entity_type}"
         if aliases:
             line += f" | also written as: {', '.join(aliases)}"
+        if mishearings:
+            line += f" | common ASR errors: {', '.join(mishearings)}"
         if subtype:
             line += f" | subtype: {subtype}"
         if description:
             line += f" | description: {description}"
+        if note:
+            line += f" | note: {note}"
         registry_entries.append(line)
 
     if registry_entries:

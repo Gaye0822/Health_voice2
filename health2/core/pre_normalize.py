@@ -28,8 +28,9 @@ def _get_corrections() -> list:
 
 def _get_registry_aliases() -> list:
     """
-    KB registry'den canonical terms ve aliases çek.
-    Her giriş: {"canonical": str, "aliases": [str], "entity_type": str}
+    KB registry'den canonical terms ve mishearings çek.
+    Mishearings: fonetik ASR hataları — fuzzy match için kullanılır.
+    Aliases: açıklayıcı isimler — sadece LLM context için, fuzzy match'e girmez.
     """
     try:
         from core.db import get_db_connection
@@ -50,14 +51,15 @@ def _get_registry_aliases() -> list:
     entries = []
     for row in rows:
         canonical, entity_type, before_json = row
-        aliases = []
+        mishearings = []
         if before_json and isinstance(before_json, dict):
-            aliases = before_json.get("aliases", [])
-        entries.append({
-            "canonical": canonical,
-            "aliases": aliases,
-            "entity_type": entity_type or ""
-        })
+            mishearings = before_json.get("mishearings", [])
+        if mishearings:  # Sadece mishearings varsa ekle
+            entries.append({
+                "canonical": canonical,
+                "mishearings": mishearings,
+                "entity_type": entity_type or ""
+            })
     return entries
 
 
@@ -160,74 +162,56 @@ def apply_deterministic_corrections(raw_text: str) -> dict:
                     "reason": f"Possible ASR error: similar to known correction '{original}' ({score:.0f}% match)"
                 })
 
-    # ── 2. KB Registry — canonical terms ve aliases ────────────────────────────
-    # Sadece gerçek alias'ları kullan — canonical term'in kendisini eşleştirme
-    # Minimum 4 karakter ve en az 2 kelime olan alias'lar için fuzzy match yap
+    # ── 2. KB Registry — sadece mishearings kullan ────────────────────────────
+    # Mishearings (fonetik ASR hataları) → exact ve fuzzy match için
+    # Aliases LLM context için kullanılır, fuzzy match'e girmez
     for entry in registry:
         canonical = entry["canonical"]
-        aliases = entry["aliases"]
+        mishearings = entry.get("mishearings", [])
 
-        for alias in aliases:
-            if not alias:
+        for mishearing in mishearings:
+            if not mishearing or len(mishearing) < 3:
                 continue
+            mishearing_words = mishearing.split()
+            use_fuzzy = len(mishearing_words) >= 2
 
-            # Çok kısa alias'ları atla — yanlış pozitif riski yüksek
-            if len(alias) < 4:
-                continue
-
-            # Tek kelimeli alias'larda fuzzy match yapma — exact match yeterli
-            alias_words = alias.split()
-            use_fuzzy = len(alias_words) >= 2
-
-            # Exact match — her zaman düzelt
-            if alias.lower() in text.lower():
-                pattern = re.compile(re.escape(alias), re.IGNORECASE)
+            if mishearing.lower() in text.lower():
+                pattern = re.compile(re.escape(mishearing), re.IGNORECASE)
                 if pattern.search(text):
                     text = pattern.sub(canonical, text)
-                    applied.append(f'"{alias}" → "{canonical}" (registry alias)')
+                    applied.append(f'"{mishearing}" → "{canonical}" (registry mishearing)')
                     continue
 
-            # Fuzzy match — sadece çok kelimeli alias'lar için
             if not use_fuzzy:
                 continue
 
             words = text.split()
-            for i in range(len(words) - len(alias_words) + 1):
-                token = " ".join(words[i:i + len(alias_words)])
-
-                # Token uzunluğu alias uzunluğuna yakın olmalı
-                len_ratio = len(token) / max(len(alias), 1)
+            for i in range(len(words) - len(mishearing_words) + 1):
+                token = " ".join(words[i:i + len(mishearing_words)])
+                len_ratio = len(token) / max(len(mishearing), 1)
                 if len_ratio < 0.7 or len_ratio > 1.4:
                     continue
-
-                # İlk kelime benzerliği de yüksek olmalı
-                first_word_score = fuzz.ratio(
-                    alias_words[0].lower(),
-                    words[i].lower()
-                )
+                first_word_score = fuzz.ratio(mishearing_words[0].lower(), words[i].lower())
                 if first_word_score < 80:
                     continue
-
-                # Son kelime benzerliği de yüksek olmalı
-                if len(alias_words) >= 2:
+                if len(mishearing_words) >= 2:
                     last_word_score = fuzz.ratio(
-                        alias_words[-1].lower(),
-                        words[i + len(alias_words) - 1].lower()
+                        mishearing_words[-1].lower(),
+                        words[i + len(mishearing_words) - 1].lower()
                     )
                     if last_word_score < 70:
                         continue
-
-                score = fuzz.ratio(alias.lower(), token.lower())
+                score = fuzz.ratio(mishearing.lower(), token.lower())
                 if score >= 92:
                     text = text.replace(token, canonical, 1)
-                    applied.append(f'"{token}" → "{canonical}" (fuzzy {score:.0f}%, registry alias)')
+                    applied.append(f'"{token}" → "{canonical}" (fuzzy {score:.0f}%, registry mishearing)')
                     break
                 elif score >= 85:
                     flagged.append({
                         "original": token,
                         "suggested": canonical,
-                        "context": " ".join(words[max(0, i-3):i+len(alias_words)+3]),
-                        "reason": f"Possible alias for '{canonical}' ({score:.0f}% match)"
+                        "context": " ".join(words[max(0, i-3):i+len(mishearing_words)+3]),
+                        "reason": f'Possible mishearing of "{canonical}" ({score:.0f}% match)'
                     })
 
     return {
