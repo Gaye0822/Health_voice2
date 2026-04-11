@@ -35,10 +35,8 @@ CandidateType = Literal[
     "device",
     "measurement",
     "meal",
-    "outcome",
     "theory",
     "outside",
-    "context",
     "other"
 ]
 
@@ -74,34 +72,26 @@ class IntakeEntity(BaseModel):
     dose: Optional[float] = None
     unit: Optional[str] = None
     time: Optional[str] = None
-    event_date: Optional[str] = None  # for past events: "yesterday", "Friday", "last week"
     category: IntakeCategory
     notes: Optional[str] = None
 
 
-SymptomStatus = Literal["present", "absent"]
-
 class SymptomEntity(BaseModel):
     type: Literal["symptom"]
     label: str
-    status: SymptomStatus = "present"
     onset_time: Optional[str] = None
     severity: Optional[str] = None
     qualifier: Optional[str] = None
     duration: Optional[str] = None
-    interval: Optional[str] = None
-    source: Optional[str] = None
-    notes: Optional[str] = None
 
 
 class ActivityEntity(BaseModel):
     type: Literal["activity"]
     label: str
     start_time: Optional[str] = None
-    end_time: Optional[str] = None
     duration: Optional[str] = None
     status: ActivityStatus
-    event_date: Optional[str] = None  # for past events: "yesterday", "Friday", "last week"
+    event_date: Optional[str] = None  # "yesterday", specific date if not today
     notes: Optional[str] = None
 
 
@@ -109,10 +99,9 @@ class MachineEntity(BaseModel):
     type: Literal["machine"]
     label: str
     start_time: Optional[str] = None
-    end_time: Optional[str] = None
     duration: Optional[str] = None
     status: MachineStatus
-    event_date: Optional[str] = None  # for past events: "yesterday", "Friday", "last week"
+    event_date: Optional[str] = None  # "yesterday", specific date if not today
     notes: Optional[str] = None
 
 
@@ -151,7 +140,8 @@ class MealEntity(BaseModel):
     time: Optional[str] = None
     eaten_out: Optional[bool] = None
     restaurant: Optional[str] = None  # only if eaten_out is True and restaurant name is mentioned
-    description: Optional[str] = None  # free-text handoff for downstream food system — preserve as spoken
+    event_date: Optional[str] = None  # "yesterday", "2025-11-14", etc. if meal was not today
+    description: Optional[str] = None  # free-text food description handoff for downstream food system
 
 
 class InterventionEntity(BaseModel):
@@ -166,7 +156,6 @@ class InterventionEntity(BaseModel):
 class OutcomeEntity(BaseModel):
     type: Literal["outcome"]
     linked_to: str
-    what: Optional[str] = None        # what changed: "language recognition", "caffeine sensitivity", "nocturia"
     onset_time: Optional[str] = None
     qualifier: Optional[str] = None
     direction: OutcomeDirection
@@ -194,13 +183,9 @@ class TheoryEntity(BaseModel):
     linked_to_type: Optional[str] = None
 
 
-OutsideSubtype = Literal["device_failure", "source_discrepancy", "procurement", "operational", "general"]
-
 class OutsideEntity(BaseModel):
     type: Literal["outside"]
     raw_text: str
-    subtype: Optional[OutsideSubtype] = None  # device_failure: unreliable source/sensor issue
-    notes: Optional[str] = None  # additional context, related recommendations, or follow-up
 
 
 # ─────────────────────────────────────────
@@ -261,20 +246,19 @@ def get_mention_tool_schema() -> dict:
 
 ENTITY_SCHEMAS = {
     "intake": {
-        "fields": ["label", "action", "dose", "unit", "time", "event_date", "category", "notes"],
+        "fields": ["label", "action", "dose", "unit", "time", "category", "notes"],
         "actions": ["took", "did_not_take"],
         "categories": ["supplement", "prescription", "OTC", "food"]
     },
     "symptom": {
-        "fields": ["label", "status", "onset_time", "severity", "qualifier", "duration", "interval", "source", "notes"],
-        "statuses": ["present", "absent"]
+        "fields": ["label", "onset_time", "severity", "qualifier", "duration"]
     },
     "activity": {
-        "fields": ["label", "start_time", "end_time", "duration", "status", "event_date", "notes"],
+        "fields": ["label", "start_time", "duration", "status", "notes"],
         "statuses": ["completed", "planned", "incomplete"]
     },
     "machine": {
-        "fields": ["label", "start_time", "end_time", "duration", "status", "event_date", "notes"],
+        "fields": ["label", "start_time", "duration", "status", "notes"],
         "statuses": ["used", "planned"]
     },
     "device": {
@@ -286,14 +270,14 @@ ENTITY_SCHEMAS = {
         "note": "Numeric values only."
     },
     "meal": {
-        "fields": ["label", "time", "eaten_out", "restaurant", "description"]
+        "fields": ["label", "time", "eaten_out", "items"]
     },
     "intervention": {
         "fields": ["label", "start_date", "end_date", "status", "notes"],
         "statuses": ["active", "completed", "unknown"]
     },
     "outcome": {
-        "fields": ["linked_to", "what", "onset_time", "qualifier", "direction"],
+        "fields": ["linked_to", "onset_time", "qualifier", "direction"],
         "directions": ["positive", "negative", "mixed", "unknown"]
     },
     "test": {
@@ -307,7 +291,6 @@ ENTITY_SCHEMAS = {
         "fields": ["raw_text", "linked_to_label", "linked_to_type"]
     },
     "outside": {
-        "fields": ["raw_text", "subtype", "notes"],
-        "subtypes": ["device_failure", "source_discrepancy", "procurement", "operational", "general"]
+        "fields": ["raw_text"]
     }
 }

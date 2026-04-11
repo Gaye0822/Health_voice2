@@ -300,6 +300,11 @@ EVENT_DATE FIELD (intake, activity, machine):
   "took paracetamol on Friday" → event_date: "Friday"
   "did the IV last week" → event_date: "last week"
 - If the event happened today → leave event_date null
+- CRITICAL: When the transcript switches between yesterday and today, track which
+  events belong to which day. Look for temporal markers like "yesterday", "this morning",
+  "today". Activities described in a "yesterday" narrative get event_date: "yesterday".
+  Example: "yesterday I did onsen around 10:15, then breakfast... this morning I had..."
+  → onsen (event_date: "yesterday"), breakfast today (event_date: null)
 
 DURATION:
 - If expressed as hours and minutes ("seven hours 20 minutes", "1 hour 45 minutes")
@@ -390,6 +395,26 @@ LABEL RULE:
 MEAL RULE:
 - Capture: label, time, eaten_out (true/false)
 - If eaten_out is true and a restaurant name is mentioned → put it in restaurant field
+- event_date: if the meal did NOT happen today, capture when it happened.
+  Use "yesterday" if the user says yesterday, or a specific date if stated.
+  Do NOT drop meals just because they happened yesterday — preserve them with event_date.
+
+  CRITICAL: When the transcript switches between yesterday and today, track which
+  meals belong to which day. Look for temporal markers like "yesterday", "this morning",
+  "today". Meals described in a "yesterday" context get event_date: "yesterday".
+
+  The mention passed to you has a context field — if it contains "yesterday" or
+  references past events, set event_date: "yesterday".
+
+  IMPORTANT: If a mention has a "_event_date_hint" field set to "yesterday",
+  you MUST set event_date: "yesterday" for that meal entity. This is a pre-computed
+  signal from the system — do not override it.
+
+  Example: "yesterday I did [X]... then breakfast right around 10:15, lunch at 2 PM, dinner around 6"
+  → breakfast (event_date: "yesterday"), lunch (event_date: "yesterday"), dinner (event_date: "yesterday")
+  "this morning had... breakfast" → event_date: null (today)
+  - If the meal is clearly from today → event_date: null
+
 - description: preserve the user's spoken food description as a single free-text string
   This is a handoff field for the downstream food system — do not parse or structure it
   Copy the relevant spoken content as-is: "150g chicken, 250g white bread, 40g butter"
@@ -552,6 +577,17 @@ def structure_mentions(mentions: list, normalized_text: str) -> list:
     if not mentions:
         return []
 
+    # Deterministik: meal mention'larında reasoning'de "yesterday" geçiyorsa
+    # _event_date hint'i ekle — LLM bunu event_date field'ına koyacak
+    for m in mentions:
+        if m.get("candidate_type") == "meal":
+            reasoning = m.get("reasoning", "").lower()
+            context = m.get("context", "").lower()
+            if "yesterday" in reasoning or "yesterday" in context:
+                m["_event_date_hint"] = "yesterday"
+            elif "this morning" in reasoning or "today" in reasoning:
+                m["_event_date_hint"] = None
+
     mentions_json = json.dumps(mentions, indent=2)
 
     response = client.messages.create(
@@ -596,7 +632,68 @@ def structure_mentions(mentions: list, normalized_text: str) -> list:
             print(f"⚠️ structure_mentions: Pydantic rejected entity {raw_entity.get('type', '?')} / {raw_entity.get('label', raw_entity.get('linked_to', '?'))}: {e}")
             # Drop the malformed entity — do not pass raw dicts through
 
+    # Attach raw_mention from mentions list to each entity
+    entities = _attach_raw_mentions(entities, mentions)
+
+    # Deterministik event_date hint uygula
+    # Mention'da _event_date_hint varsa entity'ye uygula
+    mention_hint_map = {}
+    for m in mentions:
+        hint = m.get("_event_date_hint")
+        if hint is not None:
+            raw = m.get("raw_mention", "").lower()
+            mention_hint_map[raw] = hint
+    
+    # structure.py'da event_date hint bölümüne geçici debug ekle:
+    print(f"DEBUG hint_map keys: {list(mention_hint_map.keys())}")
+    for entity in entities:
+        if entity.get("type") == "meal":
+            print(f"DEBUG meal label: '{entity.get('label', '').lower()}'")
+
+    
+
+    for entity in entities:
+        if entity.get("type") == "meal":
+            label = entity.get("label", "").lower()
+            # Check if this meal's label matches a hinted mention
+            if label in mention_hint_map:
+                hint = mention_hint_map[label]
+                if hint and not entity.get("event_date"):
+                    entity["event_date"] = hint
+                    print(f"⚙️  event_date hint applied: meal '{label}' → event_date: '{hint}'")
+
     return _resolve_time_references(entities)
+
+
+def _attach_raw_mentions(entities: list, mentions: list) -> list:
+    """
+    For each entity, find the closest matching mention and attach:
+    - _raw_mention: original transcript text (from inferred_as if LLM changed it)
+    This allows save_entities to detect when LLM inferred a different label.
+    """
+    for entity in entities:
+        label = entity.get("label", entity.get("metric", entity.get("linked_to", "")))
+        entity_type = entity.get("type", "")
+
+        for m in mentions:
+            m_raw = m.get("raw_mention", "")
+            m_inferred = m.get("inferred_as")  # original transcript text if LLM changed it
+
+            # Exact match on raw_mention
+            if m_raw.lower() == label.lower():
+                if m_inferred:
+                    # LLM changed the term — record original transcript text
+                    entity["_raw_mention"] = m_inferred
+                    print(f"⚙️  attach_raw_mention: '{m_inferred}' → '{label}' (inferred by mention LLM)")
+                break
+
+            # Match via inferred_as — raw_mention was normalized
+            if m_inferred and m_raw.lower() == label.lower():
+                entity["_raw_mention"] = m_inferred
+                print(f"⚙️  attach_raw_mention: '{m_inferred}' → '{label}' (via inferred_as)")
+                break
+
+    return entities
 
 
 def _resolve_time_references(entities: list) -> list:

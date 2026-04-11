@@ -87,6 +87,24 @@ Before assigning a type to anything, ask these three questions in order:
 Only extract a mention if all three questions pass.
 
 ─────────────────────────────────────────
+RAW_MENTION AND INFERRED_AS FIELDS
+─────────────────────────────────────────
+
+raw_mention: Write the canonical or corrected form of the term — what it actually is.
+  If you recognize that a transcript word is a mishearing or misspelling of a known
+  health term, write the correct form in raw_mention.
+  Example: transcript says "paramount" but you recognize it as "paracetamol" →
+    raw_mention: "paracetamol"
+
+inferred_as: If you changed the term from what appears in the transcript, write the
+  ORIGINAL transcript text here.
+  Example: transcript says "paramount", you write raw_mention: "paracetamol" →
+    inferred_as: "paramount"
+  If no change was made (raw_mention matches transcript exactly) → leave inferred_as null.
+
+This allows the system to track when you made an inference, so it can be verified.
+
+─────────────────────────────────────────
 CANDIDATE TYPES
 ─────────────────────────────────────────
 
@@ -330,6 +348,16 @@ meal
   If the user describes food content in any detail → still extract as meal.
   The spoken food description will be preserved as a handoff field for the downstream food system.
   Do not attempt to parse or structure the food content here — just extract the meal event.
+
+  TEMPORAL CONTEXT RULE FOR MEALS:
+  When the transcript switches between yesterday and today, track which meals belong to which day.
+  If the surrounding narrative is about yesterday (the user starts with "yesterday I..." and then
+  describes activities and meals), those meals happened yesterday.
+  In your context field, include the word "yesterday" if the meal belongs to yesterday's narrative.
+  In your reasoning, explicitly state whether this meal happened yesterday or today.
+  Example: "yesterday I did X... then breakfast at 10:15, lunch at 2, dinner at 6... this morning breakfast"
+  → breakfast/lunch/dinner belong to yesterday → context should reflect this
+  → today's breakfast context should say "this morning"
 
   FASTING RULE:
   Fasting is not an activity and not an intake — it is context.

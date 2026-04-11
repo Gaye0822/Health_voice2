@@ -165,20 +165,16 @@ elif st.session_state.step == "review_transcript":
 
                 with col1:
                     if suggested and st.button(f"✅ Use **{suggested}**", key=f"accept_{i}", use_container_width=True):
+                        # Apply correction directly to edited text
                         st.session_state.edited = st.session_state.edited.replace(original, suggested, 1)
                         st.session_state.normalized = st.session_state.edited
-                        found_in_kb = save_correction(
+                        save_correction(
                             original=original,
                             corrected=suggested,
                             correction_type="normalization",
                             context_hint=context
                         )
                         low_conf[i]["_resolved"] = True
-                        if not found_in_kb:
-                            st.session_state["kb_prompt"] = {
-                                "original": original,
-                                "corrected": suggested
-                            }
                         st.toast(f"✅ Applied: '{original}' → '{suggested}'")
                         st.rerun()
 
@@ -202,18 +198,13 @@ elif st.session_state.step == "review_transcript":
                             if custom:
                                 st.session_state.edited = st.session_state.edited.replace(original, custom, 1)
                                 st.session_state.normalized = st.session_state.edited
-                                found_in_kb = save_correction(
+                                save_correction(
                                     original=original,
                                     corrected=custom,
                                     correction_type="normalization",
                                     context_hint=context
                                 )
                                 low_conf[i]["_resolved"] = True
-                                if not found_in_kb:
-                                    st.session_state["kb_prompt"] = {
-                                        "original": original,
-                                        "corrected": custom
-                                    }
                                 st.toast(f"✅ Applied: '{original}' → '{custom}'")
                                 st.rerun()
 
@@ -237,37 +228,6 @@ elif st.session_state.step == "review_transcript":
                             st.rerun()
 
         st.divider()
-
-    # ── KB Registry prompt ────────────────────────────────────────────
-    if st.session_state.get("kb_prompt"):
-        kb_data = st.session_state["kb_prompt"]
-        st.warning(f"**'{kb_data['corrected']}'** is not in the KB registry yet. Add it?")
-        kb_col1, kb_col2, kb_col3 = st.columns([2, 2, 1])
-        with kb_col1:
-            kb_entity_type = st.selectbox(
-                "Entity type",
-                CANDIDATE_TYPES,
-                key="kb_entity_type_global",
-                label_visibility="collapsed"
-            )
-        with kb_col2:
-            if st.button("➕ Add to KB", key="kb_add_global", use_container_width=True):
-                from core.db import save_knowledge
-                save_knowledge(
-                    original_text=kb_data["corrected"],
-                    correction_type="registry",
-                    corrected_value=kb_entity_type,
-                    reason="Added from normalization correction",
-                    example_before={"aliases": [kb_data["original"]]},
-                    example_after={"subtype": "", "description": ""}
-                )
-                del st.session_state["kb_prompt"]
-                st.toast(f"✅ '{kb_data['corrected']}' added to KB as {kb_entity_type}")
-                st.rerun()
-        with kb_col3:
-            if st.button("Skip", key="kb_skip_global", use_container_width=True):
-                del st.session_state["kb_prompt"]
-                st.rerun()
 
     # ── Pending flags summary ─────────────────────────────────────────
     if st.session_state.pending_flags:
@@ -447,6 +407,55 @@ elif st.session_state.step == "review_mentions":
                 entities = structure_mentions(updated_mentions, st.session_state.normalized)
             with st.spinner("Validating entities (Stage 3)..."):
                 entities, validation_changes = validate_entities(entities, st.session_state.normalized)
+
+            # Attach raw_mention info after validation — validator strips unknown fields
+            # For each entity, find if a mention's inferred_as matches the label
+            from core.db import _get_kb_labels_simple
+            kb_labels = _get_kb_labels_simple()
+
+            # Build event_date hint map from mentions
+            # For same label (e.g. two breakfasts), track both yesterday and today
+            event_date_hints = []  # list of (raw_mention, hint)
+            for m in updated_mentions:
+                if m.get("candidate_type") == "meal":
+                    reasoning = m.get("reasoning", "").lower()
+                    context = m.get("context", "").lower()
+                    raw = m.get("raw_mention", "").lower()
+                    if "yesterday" in reasoning or "yesterday" in context:
+                        event_date_hints.append((raw, "yesterday"))
+                    elif "this morning" in reasoning or "today" in reasoning:
+                        event_date_hints.append((raw, None))  # today = null
+                    else:
+                        event_date_hints.append((raw, None))
+
+            # Apply event_date hints to meal entities in order
+            meal_entities = [e for e in entities if e.get("type") == "meal"]
+            meal_hints = [h for h in event_date_hints]  # same order as mentions
+
+            for i, entity in enumerate(meal_entities):
+                if not entity.get("event_date") and i < len(meal_hints):
+                    raw, hint = meal_hints[i]
+                    if hint:
+                        entity["event_date"] = hint
+                        print(f"⚙️  app.py event_date: meal '{entity.get('label')}' → '{hint}'")
+
+            for entity in entities:
+                label = entity.get("label", entity.get("metric", entity.get("linked_to", "")))
+                entity_type = entity.get("type", "")
+
+                # Check inferred label (paramount → paracetamol)
+                for m in updated_mentions:
+                    m_raw = m.get("raw_mention", "")
+                    m_inferred = m.get("inferred_as")
+                    if m_raw.lower() == label.lower() and m_inferred:
+                        entity["_raw_mention"] = m_inferred
+                        break
+
+                # Check KB — intake label not in KB
+                if entity_type == "intake" and not entity.get("_raw_mention"):
+                    if label.lower() not in kb_labels:
+                        entity["_not_in_kb"] = True
+
             st.session_state.mentions = updated_mentions
             st.session_state.entities = entities
             st.session_state.validation_changes = validation_changes
@@ -485,7 +494,12 @@ elif st.session_state.step == "review_entities":
             entity_type = entity.get("type", "unknown")
             label = entity.get("label", entity.get("metric", entity.get("linked_to", "unknown")))
             icon = TYPE_ICONS.get(entity_type, "📌")
-            with st.expander(f"{icon} {entity_type.upper()} — {label}"):
+            unverified_badge = " ⚠️" if (entity.get("_raw_mention") or entity.get("_not_in_kb")) else ""
+            with st.expander(f"{icon} {entity_type.upper()} — {label}{unverified_badge}"):
+                if entity.get("_raw_mention"):
+                    st.caption(f"⚠️ Inferred from transcript: '{entity['_raw_mention']}'")
+                if entity.get("_not_in_kb"):
+                    st.caption(f"⚠️ Label '{label}' not found in KB registry")
                 st.json(entity)
 
     if meal_entities:

@@ -219,12 +219,29 @@ These entities represent explicitly stated absences. The transcript negating the
 is exactly why they exist. Do NOT remove a symptom entity that already has status: "absent".
 That entity is correct — it captures the user's explicit statement that something did not occur.
 
-If the transcript negates it (and it is NOT an absent symptom) → remove the entity,
-or move to outside if it has operational value.
-If you are unsure → remove. For contradiction check, the default is removal not preservation.
+IMPORTANT EXCEPTION — activity, machine, device entities:
+NEVER remove an activity, machine, or device entity for any reason.
+These entity types passed through mention_filter before reaching you.
+That filter already eliminated future plans and unconfirmed events.
+If an activity entity is in your input, it was confirmed as completed.
+Your job is NOT to re-evaluate whether activities happened.
+Even if the transcript contains ambiguous language like "didn't want" near an activity,
+do NOT remove it. "Didn't want" is frequently an ASR error for "did do".
+Leave all activity, machine, and device entities exactly as they are.
 
-This rule has no exceptions. An entity that contradicts the transcript must not survive
-validation regardless of how confidently it was extracted.
+IMPORTANT EXCEPTION — intake entities with action: "did_not_take":
+These already capture the fact that something was NOT taken. Do NOT remove them.
+They are correct by definition — the "did_not_take" action IS the negation.
+
+For intake entities with action: "took":
+If the transcript clearly states the substance was NOT taken → remove or change to did_not_take.
+
+If the transcript negates it (and none of the above exceptions apply) → remove the entity,
+or move to outside if it has operational value.
+If you are unsure → leave unchanged. Default is preservation, not removal.
+
+This rule applies only to clear, unambiguous negations. ASR errors frequently
+distort words — "didn't want" may be an error for "did". When in doubt, preserve.
 
 ─────────────────────────────────────────
 STRICT LIMITS — DO NOT:
@@ -244,6 +261,11 @@ STRICT LIMITS — DO NOT:
   If you think something is missing → that is a job for the extraction stage, not validation.
 - Change action fields (took / did_not_take)
 - Make temporal judgments beyond what the transcript says
+- Remove an entity based on ambiguous ASR language when specific timing exists.
+  If an entity has a specific time (clock time, AM/PM, "this morning", "around X"),
+  that timing is strong evidence the event occurred — do NOT remove it based on
+  ambiguous phrasing like "didn't want", "wasn't sure", "maybe" nearby in the transcript.
+  ASR errors frequently distort words — "didn't want" may be an error for "did do".
 
 KB removal is an explicit instruction, not an ontological judgment.
 If the label is in the removal list → remove it. This overrides the "do not remove" limit.
@@ -278,11 +300,22 @@ If no changes needed, return original entities with empty changes list."""
     raw = response.content[0].text.strip()
     print(f'⚠️ VALIDATOR RAW RESPONSE:\n{raw[:2000]}')
 
-    if raw.startswith("```"):
+    # Extract JSON — handle cases where LLM writes analysis before JSON block
+    if "```json" in raw:
+        raw = raw.split("```json")[1].split("```")[0].strip()
+    elif "```" in raw:
         raw = raw.split("```")[1]
         if raw.startswith("json"):
             raw = raw[4:]
         raw = raw.strip()
+    elif raw.startswith("{"):
+        pass  # already pure JSON
+    else:
+        # Try to find JSON object in the response
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start != -1 and end != -1:
+            raw = raw[start:end+1]
 
     if not raw:
         print("⚠️ Validator empty response")
@@ -347,7 +380,19 @@ If no changes needed, return original entities with empty changes list."""
                     e["type"] = original_type
 
         all_changes.extend(llm_changes)
-        final = _resolve_time_references(validated) + protected
+        final_entities = _resolve_time_references(validated) + protected
+
+        # Re-validate through Pydantic to ensure all fields have defaults
+        try:
+            from core.models import EntityOutput
+        except ImportError:
+            from models import EntityOutput
+        try:
+            reparsed = EntityOutput.model_validate({"entities": final_entities})
+            final = [e.model_dump() for e in reparsed.entities]
+        except Exception:
+            final = final_entities
+
         return final, all_changes
     except json.JSONDecodeError as e:
         print(f"⚠️ Validator JSON parse error: {e}")

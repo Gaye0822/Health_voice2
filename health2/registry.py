@@ -42,8 +42,10 @@ def get_registry() -> list:
             "canonical": row[1],
             "entity_type": row[2],
             "aliases": before.get("aliases", []),
+            "mishearings": before.get("mishearings", []),
             "subtype": after.get("subtype", ""),
             "description": after.get("description", ""),
+            "note": after.get("note", ""),
             "created_at": row[7]
         })
     return results
@@ -194,7 +196,7 @@ def delete_entry(entry_id: int):
 # UI — Tabs
 # ─────────────────────────────────────────
 
-tab1, tab2, tab3 = st.tabs(["📋 Registry", "🗑️ Removals", "🔀 Classifications"])
+tab1, tab2, tab3, tab4 = st.tabs(["📋 Registry", "🗑️ Removals", "🔀 Classifications", "⚠️ Unverified"])
 
 
 # ══════════════════════════════════════════
@@ -260,6 +262,7 @@ with tab1:
 
         for entry in entries:
             aliases_str = ", ".join(entry["aliases"]) if entry["aliases"] else "—"
+            mishearings_str = ", ".join(entry["mishearings"]) if entry["mishearings"] else "—"
             with st.expander(f"**{entry['canonical']}** — {entry['entity_type']}"):
                 col1, col2 = st.columns([4, 1])
                 with col1:
@@ -267,7 +270,10 @@ with tab1:
                         st.write(f"**Subtype:** {entry['subtype']}")
                     if entry["description"]:
                         st.write(f"**Description:** {entry['description']}")
+                    if entry["note"]:
+                        st.write(f"**Note:** {entry['note']}")
                     st.write(f"**Aliases:** {aliases_str}")
+                    st.write(f"**Mishearings:** {mishearings_str}")
                 with col2:
                     if st.button("🗑️ Delete", key=f"del_reg_{entry['id']}"):
                         delete_entry(entry["id"])
@@ -404,3 +410,164 @@ with tab3:
                         delete_entry(entry["id"])
                         st.toast(f"Deleted: {entry['label']}")
                         st.rerun()
+
+# ══════════════════════════════════════════
+# TAB 4 — Unverified Entities
+# ══════════════════════════════════════════
+
+with tab4:
+    st.header("Unverified Entities")
+    st.caption("Entities flagged during extraction — label not in KB or low confidence mention.")
+
+    try:
+        from core.db import get_unverified_entities, approve_unverified_entity, reject_unverified_entity, save_knowledge
+    except ImportError:
+        from db import get_unverified_entities, approve_unverified_entity, reject_unverified_entity, save_knowledge
+
+    status_filter = st.radio("Status", ["pending", "approved", "rejected"], horizontal=True)
+    unverified = get_unverified_entities(status=status_filter)
+
+    if not unverified:
+        st.info(f"No {status_filter} entities.")
+    else:
+        st.write(f"**{len(unverified)} {status_filter} entity(ies)**")
+
+        for item in unverified:
+            entity = item["entity"]
+            label = entity.get("label", entity.get("metric", entity.get("linked_to", "?")))
+            etype = entity.get("type", "?")
+            flag = item["flag_reason"] or ""
+
+            with st.expander(f"⚠️ {etype.upper()} — {label}"):
+                col1, col2 = st.columns([3, 1])
+
+                with col1:
+                    st.caption(f"🚩 {flag}")
+                    if item["context"]:
+                        st.write(f"**Context:** *\"{item['context']}\"*")
+                    if item["reasoning"]:
+                        st.caption(f"💭 Reasoning: {item['reasoning']}")
+
+                    # Show relevant transcript snippet
+                    transcript = item.get("transcript_text", "")
+                    if transcript and label:
+                        idx = transcript.lower().find(label.lower())
+                        if idx >= 0:
+                            snippet = transcript[max(0, idx-80):idx+80]
+                            st.write(f"**Transcript:** ...{snippet}...")
+
+                    st.json(entity)
+
+                with col2:
+                    if status_filter == "pending":
+                        flag = item["flag_reason"] or ""
+                        is_inferred = "inferred from" in flag  # paramount → paracetamol case
+                        is_not_in_kb = "not found in KB" in flag
+
+                        # KB type selector — shown for both approve and correct
+                        kb_type = st.selectbox(
+                            "Entity type",
+                            ENTITY_TYPES,
+                            key=f"kbtype_{item['id']}",
+                            label_visibility="collapsed"
+                        )
+
+                        # Approve as-is
+                        if st.button("✅ Approve", key=f"approve_{item['id']}", use_container_width=True):
+                            approve_unverified_entity(item["id"])
+
+                            if is_inferred:
+                                # Extract original term from flag_reason
+                                # "Label 'Paracetamol' inferred from 'paramount' — not a registered mishearing"
+                                try:
+                                    original_term = flag.split("inferred from '")[1].split("'")[0]
+                                except Exception:
+                                    original_term = None
+
+                                if original_term:
+                                    # Check if canonical already in KB
+                                    from core.db import get_db_connection
+                                    conn = get_db_connection()
+                                    cur = conn.cursor()
+                                    cur.execute(
+                                        "SELECT id, example_before FROM knowledge_base WHERE correction_type='registry' AND LOWER(original_text)=LOWER(%s)",
+                                        (label,)
+                                    )
+                                    existing = cur.fetchone()
+                                    if existing:
+                                        # Add as mishearing
+                                        import json as _json
+                                        before = existing[1] if existing[1] else {}
+                                        mishearings = before.get("mishearings", [])
+                                        if original_term.lower() not in [m.lower() for m in mishearings]:
+                                            mishearings.append(original_term)
+                                            cur.execute(
+                                                "UPDATE knowledge_base SET example_before=%s WHERE id=%s",
+                                                (_json.dumps({**before, "mishearings": mishearings}), existing[0])
+                                            )
+                                            conn.commit()
+                                    else:
+                                        # Create new KB entry
+                                        cur.close()
+                                        conn.close()
+                                        save_knowledge(
+                                            original_text=label,
+                                            correction_type="registry",
+                                            corrected_value=kb_type,
+                                            reason="Added from unverified entity review (inferred label approved)",
+                                            example_before={"mishearings": [original_term], "aliases": []},
+                                            example_after={"subtype": "", "description": "", "note": ""}
+                                        )
+                                        conn = None
+                                    if conn:
+                                        cur.close()
+                                        conn.close()
+                                    st.toast(f"✅ Approved + added mishearing '{original_term}' → '{label}'")
+                                else:
+                                    st.toast(f"✅ Approved: {label}")
+
+                            elif is_not_in_kb:
+                                # Label not in KB — add as new entry
+                                save_knowledge(
+                                    original_text=label,
+                                    correction_type="registry",
+                                    corrected_value=kb_type,
+                                    reason="Added from unverified entity review",
+                                    example_before={"mishearings": [], "aliases": []},
+                                    example_after={"subtype": "", "description": "", "note": ""}
+                                )
+                                st.toast(f"✅ Approved + added '{label}' to KB as {kb_type}")
+                            else:
+                                st.toast(f"✅ Approved: {label}")
+                            st.rerun()
+
+                        # Correct label + approve
+                        new_label = st.text_input(
+                            "Correct label",
+                            value=label,
+                            key=f"label_{item['id']}",
+                            label_visibility="collapsed",
+                            placeholder="Correct label..."
+                        )
+                        add_to_kb = st.checkbox("Add to KB", key=f"kb_{item['id']}", value=True)
+
+                        if st.button("✏️ Correct & Approve", key=f"correct_{item['id']}", use_container_width=True):
+                            approve_unverified_entity(item["id"], canonical_label=new_label if new_label != label else None)
+                            if add_to_kb and new_label:
+                                mishearing = label if new_label != label else None
+                                save_knowledge(
+                                    original_text=new_label,
+                                    correction_type="registry",
+                                    corrected_value=kb_type,
+                                    reason="Added from unverified entity review",
+                                    example_before={"mishearings": [mishearing] if mishearing else [], "aliases": []},
+                                    example_after={"subtype": "", "description": "", "note": ""}
+                                )
+                            st.toast(f"✅ Corrected: {label} → {new_label}")
+                            st.rerun()
+
+                        # Reject
+                        if st.button("❌ Reject", key=f"reject_{item['id']}", use_container_width=True):
+                            reject_unverified_entity(item["id"])
+                            st.toast(f"❌ Rejected: {label}")
+                            st.rerun()
