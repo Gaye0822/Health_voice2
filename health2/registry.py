@@ -450,8 +450,19 @@ with tab4:
 
                     # Show relevant transcript snippet
                     transcript = item.get("transcript_text", "")
-                    if transcript and label:
-                        idx = transcript.lower().find(label.lower())
+                    if transcript:
+                        # Try label first, then raw_mention from flag_reason
+                        search_term = label
+                        flag = item.get("flag_reason", "") or ""
+                        if "inferred from" in flag:
+                            # Extract raw_mention from flag: "Label 'X' inferred from 'Y'"
+                            import re
+                            m = re.search(r"inferred from '([^']+)'", flag)
+                            if m:
+                                search_term = m.group(1)
+                        idx = transcript.lower().find(search_term.lower())
+                        if idx < 0:
+                            idx = transcript.lower().find(label.lower())
                         if idx >= 0:
                             snippet = transcript[max(0, idx-80):idx+80]
                             st.write(f"**Transcript:** ...{snippet}...")

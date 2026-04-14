@@ -230,6 +230,23 @@ NULL RULE:
 - null for any unknown or missing value
 - NEVER the string "unknown"
 
+ACTIVITY STATUS RULE:
+- status is REQUIRED for every activity and machine entity — never omit it
+- status: "completed" → activity happened and is done (default for past events)
+- status: "planned" → activity is intended but not yet done (future plans — usually filtered out)
+- status: "incomplete" → activity was started but not finished (e.g. cut short)
+- status: "did_not_complete" → activity was explicitly NOT done / skipped entirely
+  Use when user says "didn't lift", "didn't do PEMF", "couldn't get a cold plunge in",
+  "never got to zone 2", "didn't make it to the gym"
+  The user intended to do it but it did not happen at all.
+- When in doubt → "completed" (mention_filter already ensures the activity actually happened)
+
+MACHINE STATUS RULE:
+- status is REQUIRED for every machine entity — never omit it
+- status: "used" → machine was used in this session
+- status: "did_not_use" → machine was explicitly NOT used / skipped
+  Use when user says "didn't do PEMF", "no Novothor today", "skipped the machine"
+
 SYMPTOM STATUS RULE:
 - status defaults to "present" — omit the field for normal present symptoms
 - status: "absent" only when user explicitly negates a recurring tracked phenomenon
@@ -291,7 +308,7 @@ END_TIME FIELD (activity and machine only):
 - If only duration is stated → fill duration, leave end_time null
 - If only start_time is stated → leave end_time null
 
-EVENT_DATE FIELD (intake, activity, machine):
+EVENT_DATE FIELD (intake, activity, machine, symptom):
 - Use when the event did NOT happen today — it happened on a specific past day
 - Fill with the user's own words: "yesterday", "Friday", "last week"
 - Do NOT convert to a date — preserve as stated
@@ -382,6 +399,13 @@ THEORY LINKED_TO RULE:
   "I have no idea why I slept so well" → linked_to_label: "sleep quality",
   linked_to_type: "measurement"
   "I don't know, life sucks" → linked_to_label: null (genuinely unconnected)
+
+THEORY MERGE RULE:
+- If multiple theories share the same linked_to_label, merge them into a single theory.
+- Combine their raw_text into one concise sentence covering all speculations.
+- Example: two theories both linked_to_label: "abdominal pain" →
+  merge into one: "mushrooms or eggplant may be causing digestive issues"
+- Never produce two theory entities with the same linked_to_label.
 
 LABEL RULE:
 - Specific named entity only
@@ -635,6 +659,24 @@ def structure_mentions(mentions: list, normalized_text: str) -> list:
     # Attach raw_mention from mentions list to each entity
     entities = _attach_raw_mentions(entities, mentions)
 
+    # Apply negation flag from mention_filter
+    # If mention was marked as negated, set status accordingly
+    negated_labels = set()
+    for m in mentions:
+        if m.get("_negated"):
+            negated_labels.add(m.get("raw_mention", "").lower())
+
+    for entity in entities:
+        label = entity.get("label", "").lower()
+        etype = entity.get("type", "")
+        if label in negated_labels:
+            if etype == "activity" and entity.get("status") == "completed":
+                entity["status"] = "did_not_complete"
+                print(f"⚙️  negation applied: activity '{label}' → did_not_complete")
+            elif etype == "machine" and entity.get("status") == "used":
+                entity["status"] = "did_not_use"
+                print(f"⚙️  negation applied: machine '{label}' → did_not_use")
+
     # Deterministik event_date hint uygula
     # Mention'da _event_date_hint varsa entity'ye uygula
     mention_hint_map = {}
@@ -643,14 +685,6 @@ def structure_mentions(mentions: list, normalized_text: str) -> list:
         if hint is not None:
             raw = m.get("raw_mention", "").lower()
             mention_hint_map[raw] = hint
-    
-    # structure.py'da event_date hint bölümüne geçici debug ekle:
-    print(f"DEBUG hint_map keys: {list(mention_hint_map.keys())}")
-    for entity in entities:
-        if entity.get("type") == "meal":
-            print(f"DEBUG meal label: '{entity.get('label', '').lower()}'")
-
-    
 
     for entity in entities:
         if entity.get("type") == "meal":

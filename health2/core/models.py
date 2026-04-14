@@ -37,11 +37,13 @@ CandidateType = Literal[
     "meal",
     "theory",
     "outside",
+    "context",
     "other"
 ]
 
 class Mention(BaseModel):
     raw_mention: str
+    inferred_as: Optional[str] = None  # original transcript text if LLM normalized raw_mention
     candidate_type: CandidateType
     confidence: Literal["high", "low"]
     context: str
@@ -58,8 +60,8 @@ class MentionOutput(BaseModel):
 
 IntakeAction = Literal["took", "did_not_take"]
 IntakeCategory = Literal["supplement", "prescription", "OTC", "food"]
-ActivityStatus = Literal["completed", "planned", "incomplete"]
-MachineStatus = Literal["used", "planned"]
+ActivityStatus = Literal["completed", "planned", "incomplete", "did_not_complete"]
+MachineStatus = Literal["used", "planned", "did_not_use"]
 InterventionStatus = Literal["active", "completed", "unknown"]
 OutcomeDirection = Literal["positive", "negative", "mixed", "unknown"]
 TestStatus = Literal["planned", "done"]
@@ -72,6 +74,7 @@ class IntakeEntity(BaseModel):
     dose: Optional[float] = None
     unit: Optional[str] = None
     time: Optional[str] = None
+    event_date: Optional[str] = None  # "yesterday", specific date if intake was not today
     category: IntakeCategory
     notes: Optional[str] = None
 
@@ -79,10 +82,15 @@ class IntakeEntity(BaseModel):
 class SymptomEntity(BaseModel):
     type: Literal["symptom"]
     label: str
+    status: Literal["present", "absent"] = "present"
     onset_time: Optional[str] = None
     severity: Optional[str] = None
     qualifier: Optional[str] = None
     duration: Optional[str] = None
+    interval: Optional[str] = None   # retrospective absence duration ("5-6 days", "about a week")
+    source: Optional[str] = None     # "retrospective summary" if interval filled from retrospective
+    event_date: Optional[str] = None  # "yesterday", specific date if symptom was not today
+    notes: Optional[str] = None
 
 
 class ActivityEntity(BaseModel):
@@ -91,7 +99,7 @@ class ActivityEntity(BaseModel):
     start_time: Optional[str] = None
     duration: Optional[str] = None
     status: ActivityStatus
-    event_date: Optional[str] = None  # "yesterday", specific date if not today
+    event_date: Optional[str] = None
     notes: Optional[str] = None
 
 
@@ -101,7 +109,7 @@ class MachineEntity(BaseModel):
     start_time: Optional[str] = None
     duration: Optional[str] = None
     status: MachineStatus
-    event_date: Optional[str] = None  # "yesterday", specific date if not today
+    event_date: Optional[str] = None
     notes: Optional[str] = None
 
 

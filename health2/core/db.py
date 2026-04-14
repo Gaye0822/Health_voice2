@@ -83,13 +83,26 @@ def save_correction(original: str, corrected: str, correction_type: str = "norma
 
         # ── Sync alias to KB registry only if entry already exists ────────────
         if correction_type == "normalization":
+            # First try exact match
             cur.execute(
-                """SELECT id, example_before FROM knowledge_base
+                """SELECT id, example_before, original_text FROM knowledge_base
                    WHERE correction_type = 'registry'
                    AND LOWER(original_text) = LOWER(%s)""",
                 (corrected,)
             )
             existing = cur.fetchone()
+
+            # If no exact match, try fuzzy: KB label starts with corrected term
+            if not existing:
+                cur.execute(
+                    """SELECT id, example_before, original_text FROM knowledge_base
+                       WHERE correction_type = 'registry'
+                       AND LOWER(original_text) LIKE LOWER(%s)""",
+                    (corrected + "%",)
+                )
+                existing = cur.fetchone()
+                if existing:
+                    print(f"⚙️  KB fuzzy match: '{corrected}' → '{existing[2]}'")
 
             if existing:
                 found_in_kb = True
@@ -105,7 +118,7 @@ def save_correction(original: str, corrected: str, correction_type: str = "norma
                         (json.dumps({**before_json, "mishearings": mishearings}), entry_id)
                     )
                     conn.commit()
-                    print(f"⚙️  KB registry: added mishearing '{original}' → '{corrected}'")
+                    print(f"⚙️  KB registry: added mishearing '{original}' → '{existing[2]}'")
                 else:
                     found_in_kb = True  # already in KB, no need to ask
 
@@ -374,6 +387,21 @@ def save_entities(entities: list, transcript_id: int, mentions: list = None):
                             context = m.get("context", "")
                             break
                     print(f"⚙️  unverified: '{raw_mention}' → '{label}' (inferred, not in mishearings)")
+
+        # For intake and machine only: if raw_mention differs from label → inferred, flag as unverified
+        # Symptom labels are clinical interpretations by LLM — not flagged
+        if not unverified and entity_type in ("intake", "machine") and raw_mention and raw_mention.lower() != label.lower():
+            raw_lower = raw_mention.lower()
+            mapped_canonical = kb_mishearing_map.get(raw_lower)
+            if mapped_canonical != label.lower():
+                unverified = True
+                flag_reason = f"Label '{label}' inferred from '{raw_mention}' — not a registered mishearing"
+                for m in (mentions or []):
+                    if m.get("raw_mention", "").lower() == raw_lower:
+                        reasoning = m.get("reasoning", "")
+                        context = m.get("context", "")
+                        break
+                print(f"⚙️  unverified: '{raw_mention}' → '{label}' (inferred, not in mishearings)")
 
         # Check mention confidence
         mention_info = mention_map.get(label.lower())

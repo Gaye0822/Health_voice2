@@ -161,6 +161,12 @@ symptom
   Ask: could a doctor document this as a clinical finding? If yes → symptom.
   If it is how the user feels in general → omit.
 
+  TEMPORAL CONTEXT RULE:
+  When the transcript switches between yesterday and today, track when the symptom occurred.
+  In your reasoning, explicitly state whether this symptom occurred yesterday or today.
+  This helps structure.py set event_date correctly.
+  Example: "stomach was in major pain all day yesterday" → reasoning should note "occurred yesterday"
+
   ABSENCE RULE:
   There are three states for any symptom:
   - explicit present: user says it occurred → extract as symptom, status: present (default)
@@ -361,10 +367,21 @@ meal
 
   FASTING RULE:
   Fasting is not an activity and not an intake — it is context.
-  "I fasted until 2:30 PM", "still fasted this morning", "fasting day" → context, related_to: meal timing
-  Do NOT extract fasting as activity, intake, or any other event type.
+  "I fasted until 2:30 PM", "still fasted this morning", "fasting day" → candidate_type: context, related_to: meal timing
+  Do NOT extract fasting as activity, intake, other, or any other event type.
   Exception: if the user describes a structured fasting protocol as a multi-day intervention
   ("I'm doing a 3-day water fast") → intervention.
+
+  STOOL CONSISTENCY RULE:
+  Only extract stool consistency as a symptom when the user uses a specific descriptive qualifier.
+  The user must explicitly describe the quality, texture, or state of their stool.
+  Examples that qualify: "soft mess", "complete disaster", "sloppy", "messed up", "watery",
+  "loose", "terrible", "awful", "a disaster"
+  Examples that do NOT qualify:
+  - "you wouldn't know it from the stool" → vague indirect reference → omit
+  - "stool is not great" → too vague → omit
+  - "stool situation" without description → omit
+  The qualifier must be the user's own words describing the stool's actual state.
 
 theory
   The user's own speculation, causal explanation, or personal interpretation

@@ -223,11 +223,22 @@ IMPORTANT EXCEPTION — activity, machine, device entities:
 NEVER remove an activity, machine, or device entity for any reason.
 These entity types passed through mention_filter before reaching you.
 That filter already eliminated future plans and unconfirmed events.
-If an activity entity is in your input, it was confirmed as completed.
+If an activity entity is in your input, it was confirmed as happened or explicitly noted as not done.
 Your job is NOT to re-evaluate whether activities happened.
+
+ACTIVITY STATUS CORRECTION — this is the ONLY change you may make to activity entities:
+If an activity has status: "completed" but the transcript clearly states it was NOT done
+("didn't lift", "didn't do PEMF", "couldn't get a cold plunge in") →
+change status to "did_not_complete". Do NOT remove the entity.
+If an activity has status: "did_not_complete", leave it as-is.
 Even if the transcript contains ambiguous language like "didn't want" near an activity,
-do NOT remove it. "Didn't want" is frequently an ASR error for "did do".
-Leave all activity, machine, and device entities exactly as they are.
+do NOT remove it — change status to "did_not_complete" only if negation is unambiguous.
+
+MACHINE STATUS CORRECTION — this is the ONLY change you may make to machine entities:
+If a machine has status: "used" but the transcript clearly states it was NOT used
+("didn't do PEMF", "no PEMF today", "skipped the Novothor") →
+change status to "did_not_use". Do NOT remove the entity.
+If a machine has status: "did_not_use", leave it as-is.
 
 IMPORTANT EXCEPTION — intake entities with action: "did_not_take":
 These already capture the fact that something was NOT taken. Do NOT remove them.

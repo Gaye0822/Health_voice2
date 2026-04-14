@@ -479,6 +479,36 @@ elif st.session_state.step == "review_mentions":
                         entity["event_date"] = hint
                         print(f"⚙️  app.py event_date: meal '{entity.get('label')}' → '{hint}'")
 
+            # Apply event_date hints to symptom entities
+            for entity in entities:
+                if entity.get("type") == "symptom" and not entity.get("event_date"):
+                    label = entity.get("label", "").lower()
+                    for m in updated_mentions:
+                        if m.get("candidate_type") == "symptom":
+                            m_raw = m.get("raw_mention", "").lower()
+                            if m_raw == label or label in m_raw or m_raw in label:
+                                reasoning = m.get("reasoning", "").lower()
+                                context = m.get("context", "").lower()
+                                if "yesterday" in reasoning or "yesterday" in context:
+                                    entity["event_date"] = "yesterday"
+                                    print(f"⚙️  app.py event_date: symptom '{entity.get('label')}' → 'yesterday'")
+                                break
+
+            # Apply event_date hints to intake entities
+            for entity in entities:
+                if entity.get("type") == "intake" and not entity.get("event_date"):
+                    label = entity.get("label", "").lower()
+                    for m in updated_mentions:
+                        if m.get("candidate_type") == "intake":
+                            m_raw = m.get("raw_mention", "").lower()
+                            if m_raw == label or label in m_raw or m_raw in label:
+                                reasoning = m.get("reasoning", "").lower()
+                                context = m.get("context", "").lower()
+                                if "yesterday" in reasoning or "yesterday" in context:
+                                    entity["event_date"] = "yesterday"
+                                    print(f"⚙️  app.py event_date: intake '{entity.get('label')}' → 'yesterday'")
+                                break
+
             for entity in entities:
                 label = entity.get("label", entity.get("metric", entity.get("linked_to", "")))
                 entity_type = entity.get("type", "")
@@ -574,7 +604,7 @@ elif st.session_state.step == "review_entities":
                 st.session_state.normalized,
                 "voice_note"
             )
-            save_entities(st.session_state.entities, transcript_id)
+            save_entities(st.session_state.entities, transcript_id, st.session_state.mentions)
             st.session_state.transcript_id = transcript_id
             st.session_state.step = "done"
             st.rerun()

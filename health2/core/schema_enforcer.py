@@ -116,8 +116,8 @@ def fix_unknown_strings(entity: dict) -> dict:
 
 # Valid status values per entity type
 VALID_STATUSES = {
-    "activity": {"completed", "planned", "incomplete"},
-    "machine":  {"used", "planned"},
+    "activity": {"completed", "planned", "incomplete", "did_not_complete"},
+    "machine":  {"used", "planned", "did_not_use"},
     "device":   {"used"},
     "test":     {"planned", "done"},
     "intervention": {"active", "completed", "unknown"},
