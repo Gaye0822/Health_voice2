@@ -1,0 +1,8 @@
+label,correct_type,reason,context
+aura,other,user changed type from symptom to other,The aura came first About 20
+PHGG,intake,user changed type from theory to intake,I'm not sure why the PHGG wasn't ordered
+stool quality has been way way better,outcome,Directional improvement linked to intervention. Should be outcome not symptom.,
+slept really well last night,other,"Subjective sleep quality report, not a trackable measurement.",
+IVs in Japan ineffective,theory,User speculation about IV effectiveness. Should be theory not outcome.,
+balance improvements,other,"Vague speculation, not a trackable entity.",
+took it really easy,other,"Vague activity description, not a trackable entity.",

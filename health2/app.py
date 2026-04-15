@@ -11,6 +11,7 @@ from core.validate import validate_entities
 from core.db import (
     save_transcript,
     save_entities,
+    save_normalize_flags,
     save_correction,
     save_knowledge,
     get_corrections_from_db
@@ -105,6 +106,7 @@ if st.session_state.step == "upload":
             st.session_state.normalized = result["normalized_text"]
             st.session_state.edited = result["normalized_text"]
             st.session_state.low_confidence_segments = result["low_confidence_segments"]
+            st.session_state.applied_corrections = result.get("applied_corrections", [])
             st.session_state.edit_mode = False
             st.session_state.pending_flags = []
             st.session_state.step = "review_transcript"
@@ -129,6 +131,7 @@ if st.session_state.step == "upload":
                     st.session_state.normalized = result["normalized_text"]
                     st.session_state.edited = result["normalized_text"]
                     st.session_state.low_confidence_segments = result["low_confidence_segments"]
+                    st.session_state.applied_corrections = result.get("applied_corrections", [])
                     st.session_state.edit_mode = False
                     st.session_state.pending_flags = []
                     st.session_state.step = "review_transcript"
@@ -605,6 +608,10 @@ elif st.session_state.step == "review_entities":
                 "voice_note"
             )
             save_entities(st.session_state.entities, transcript_id, st.session_state.mentions)
+            print(f"⚙️  applied_corrections at save: {st.session_state.get('applied_corrections', [])}")
+            applied_corrections = st.session_state.get("applied_corrections", [])
+            if applied_corrections:
+                save_normalize_flags(transcript_id, applied_corrections, st.session_state.entities)
             st.session_state.transcript_id = transcript_id
             st.session_state.step = "done"
             st.rerun()

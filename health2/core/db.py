@@ -481,6 +481,117 @@ def _get_kb_labels_simple() -> set:
     return labels
 
 
+
+
+def save_normalize_flags(transcript_id: int, applied_corrections: list, entities: list):
+    """
+    Pre_normalize'in uyguladığı correction'lardan KB'deki terimlere yapılanları tespit eder.
+    Eğer o terim pipeline'dan tracked entity (intake/machine/activity) olarak çıkmadıysa
+    unverified_entities tablosuna yazar — entity_type="normalize_flag" olarak.
+
+    applied_corrections: pre_result["applied"] listesi
+      format: '"original" -> "corrected" (source)'
+    entities: pipeline'dan çıkan entity listesi
+    """
+    if not applied_corrections:
+        return
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    try:
+        kb_labels, _ = _get_kb_labels(cur)
+
+        # Pipeline'dan çıkan tracked entity label'larını topla
+        tracked_labels = set()
+        for e in entities:
+            etype = e.get("type", "")
+            if etype in ("intake", "machine", "activity"):
+                label = e.get("label", "").lower()
+                if label:
+                    tracked_labels.add(label)
+
+        # applied_corrections'ı parse et ve KB'deki terimleri bul
+        import re
+        for correction in applied_corrections:
+            # Format: '"original" -> "corrected" (source)' veya
+            # '"original" → "corrected" (source)'
+            match = re.search(r'"([^"]+)"\s*(?:→|->)\s*"([^"]+)"', correction)
+            if not match:
+                continue
+            corrected_full = match.group(2).strip().lower()
+
+            # Corrected terim KB'de var mı? — tam eşleşme veya token bazlı SQL
+            corrected_match = None
+            if corrected_full in kb_labels:
+                corrected_match = corrected_full
+            else:
+                # "Dexcom thing" gibi durumlarda her token için SQL'de ara
+                for token in corrected_full.split():
+                    if len(token) <= 3:
+                        continue
+                    cur.execute(
+                        """SELECT original_text FROM knowledge_base
+                           WHERE correction_type = 'registry'
+                           AND LOWER(original_text) LIKE LOWER(%s)
+                           ORDER BY LENGTH(original_text) ASC
+                           LIMIT 1""",
+                        (f"%{token}%",)
+                    )
+                    kb_row = cur.fetchone()
+                    if kb_row:
+                        corrected_match = token
+                        break
+
+            if not corrected_match:
+                continue
+            corrected = corrected_match
+
+            # Pipeline'dan tracked entity olarak çıktı mı?
+            if corrected in tracked_labels:
+                continue
+
+            # Çıkmadı → unverified_entities'e yaz
+            # corrected = KB'deki canonical label (token bazlı bulunmuş)
+            canonical_label = corrected  # KB'de bulunan temiz label
+            flag_reason = f"normalize_flag: '{match.group(1)}' → '{canonical_label}' detected by normalize but not tracked as entity"
+            entity_json = {
+                "type": "normalize_flag",
+                "label": canonical_label,
+                "original": match.group(1),
+                "corrected": canonical_label,
+                "source": correction
+            }
+
+            cur.execute(
+                """INSERT INTO entities (transcript_id, entity_type, label, attributes, unverified, flag_reason)
+                   VALUES (%s, %s, %s, %s, TRUE, %s) RETURNING id""",
+                (transcript_id, "normalize_flag", canonical_label, json.dumps(entity_json), flag_reason)
+            )
+            entity_id = cur.fetchone()[0]
+
+            cur.execute(
+                """INSERT INTO unverified_entities
+                   (transcript_id, entity_id, entity_json, flag_reason, context, reasoning)
+                   VALUES (%s, %s, %s, %s, %s, %s)""",
+                (
+                    transcript_id,
+                    entity_id,
+                    json.dumps(entity_json),
+                    flag_reason,
+                    None,
+                    f"pre_normalize corrected '{match.group(1)}' to '{match.group(2)}' which is in KB but did not appear as tracked entity in pipeline output"
+                )
+            )
+            print(f"⚙️  normalize_flag: '{match.group(1)}' → '{match.group(2)}' saved to unverified")
+
+        conn.commit()
+    except Exception as e:
+        print(f"⚠️ save_normalize_flags error: {e}")
+    finally:
+        cur.close()
+        conn.close()
+
 def get_unverified_entities(status: str = "pending") -> list:
     """Returns unverified entities for review."""
     conn = get_db_connection()
@@ -547,6 +658,42 @@ def approve_unverified_entity(unverified_id: int, canonical_label: str = None):
             "UPDATE unverified_entities SET status = 'approved', reviewed_at = NOW() WHERE id = %s",
             (unverified_id,)
         )
+
+        # normalize_flag tipi için: original'ı canonical'ın mishearing'ine ekle
+        cur.execute(
+            "SELECT entity_type, attributes FROM entities WHERE id = %s",
+            (entity_id,)
+        )
+        entity_row = cur.fetchone()
+        if entity_row and entity_row[0] == "normalize_flag":
+            attrs = entity_row[1] if isinstance(entity_row[1], dict) else {}
+            original = attrs.get("original", "")
+            corrected = canonical_label or attrs.get("corrected", "")
+            if original and corrected:
+                # KB'de canonical entry'yi bul ve mishearing ekle
+                cur.execute(
+                    """SELECT id, example_before FROM knowledge_base
+                       WHERE correction_type = 'registry'
+                       AND (LOWER(original_text) = LOWER(%s)
+                            OR LOWER(original_text) LIKE LOWER(%s))
+                       ORDER BY LENGTH(original_text) ASC
+                       LIMIT 1""",
+                    (corrected, f"%{corrected}%")
+                )
+                kb_row = cur.fetchone()
+                if kb_row:
+                    kb_id = kb_row[0]
+                    before = kb_row[1] if isinstance(kb_row[1], dict) else {}
+                    mishearings = before.get("mishearings", [])
+                    if original.lower() not in [m.lower() for m in mishearings]:
+                        mishearings.append(original)
+                        before["mishearings"] = mishearings
+                        cur.execute(
+                            "UPDATE knowledge_base SET example_before = %s WHERE id = %s",
+                            (json.dumps(before), kb_id)
+                        )
+                        print(f"⚙️  normalize_flag approved: '{original}' added to mishearings of '{corrected}'")
+
         conn.commit()
     except Exception as e:
         print(f"⚠️ approve_unverified_entity error: {e}")

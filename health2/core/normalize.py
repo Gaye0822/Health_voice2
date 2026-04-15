@@ -24,6 +24,59 @@ def _get_knowledge_context() -> str:
         return ""
 
 
+
+def _detect_llm_corrections(raw_text: str, normalized_text: str) -> list:
+    """
+    raw_text ile normalized_text arasındaki token farklarını bulur.
+    Değişen token'lar KB'de kayıtlı bir sağlık terimine karşılık geliyorsa
+    applied_corrections listesine ekler.
+    """
+    if raw_text == normalized_text:
+        return []
+
+    try:
+        kb_labels = _get_kb_labels_for_normalize()
+    except Exception:
+        return []
+
+    raw_lower = raw_text.lower()
+    norm_tokens = normalized_text.lower().split()
+
+    applied = []
+    # normalized'daki her KB terimi raw'da geçmiyor mu diye bak
+    # geçmiyorsa LLM eklemiş/değiştirmiş demektir
+    for token in set(norm_tokens):
+        if token not in kb_labels:
+            continue
+        if token in raw_lower:
+            continue
+        # Bu token LLM tarafından eklendi — raw'daki karşılığını bul
+        # low_confidence_segments'te original olarak geçiyorsa onu kullan
+        original = token  # fallback
+        applied.append(f'"{original}" → "{token}" (llm_normalize)')
+        print(f"⚙️  llm_normalize detected: \"{original}\" → \"{token}\"")
+
+    return applied
+
+
+def _get_kb_labels_for_normalize() -> set:
+    """KB'deki canonical label'ları döndürür — normalize modülü için."""
+    try:
+        from core.db import get_db_connection
+    except ImportError:
+        from db import get_db_connection
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """SELECT original_text FROM knowledge_base
+           WHERE correction_type = 'registry'"""
+    )
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return {row[0].lower() for row in rows}
+
 def normalize_transcript(raw_text: str) -> dict:
     """
     Normalizes a voice note transcript.
@@ -171,13 +224,28 @@ If there are no uncertain terms, return an empty list for low_confidence_segment
         pre_flagged = pre_result["flagged"] if pre_result else []
         all_low_conf = pre_flagged + filtered_llm_low_conf
 
+        # LLM'in normalized_text'e uyguladığı değişiklikleri yakala
+        # raw vs normalized karşılaştırarak KB'deki terimlere yapılan değişimleri bul
+        normalized_text_final = result.get("normalized_text", working_text)
+        # low_confidence_segments'teki suggested değerler KB'de varsa da yakala
+        llm_applied = _detect_llm_corrections(raw_text, normalized_text_final)
+        for seg in llm_low_conf:
+            suggested = seg.get("suggested", "")
+            original = seg.get("original", "")
+            if suggested and original:
+                llm_applied.append(f'"{original}" → "{suggested}" (llm_normalize_flag)')
+        pre_applied = pre_result["applied"] if pre_result else []
+        all_applied = pre_applied + llm_applied
+
         return {
-            "normalized_text": result.get("normalized_text", working_text),
-            "low_confidence_segments": all_low_conf
+            "normalized_text": normalized_text_final,
+            "low_confidence_segments": all_low_conf,
+            "applied_corrections": all_applied
         }
     except json.JSONDecodeError:
         print("⚠️ normalize_transcript JSON parse error")
         return {
             "normalized_text": working_text,
-            "low_confidence_segments": pre_result["flagged"] if pre_result else []
+            "low_confidence_segments": pre_result["flagged"] if pre_result else [],
+            "applied_corrections": pre_result["applied"] if pre_result else []
         }
