@@ -519,6 +519,10 @@ def save_normalize_flags(transcript_id: int, applied_corrections: list, entities
             match = re.search(r'"([^"]+)"\s*(?:→|->)\s*"([^"]+)"', correction)
             if not match:
                 continue
+
+            # Mishearing ile yapılan düzeltmeler zaten onaylı — unverified'a yazma
+            if "registry mishearing" in correction:
+                continue
             corrected_full = match.group(2).strip().lower()
 
             # Corrected terim KB'de var mı? — tam eşleşme veya token bazlı SQL

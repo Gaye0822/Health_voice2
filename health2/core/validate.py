@@ -142,19 +142,6 @@ def validate_entities(entities: list, normalized_text: str) -> tuple:
 
     all_changes = []
 
-    # ── Step 1: Deterministic schema enforcement ──────────────────────────
-    try:
-        from core.schema_enforcer import enforce_schema, log_violations
-    except ImportError:
-        from schema_enforcer import enforce_schema, log_violations
-
-    entities, enforcer_violations = enforce_schema(entities)
-    log_violations(enforcer_violations)
-    all_changes.extend(enforcer_violations)
-
-    if not entities:
-        return [], all_changes
-
     # ── Step 1b: Measurement metric presence check ────────────────────────
     entities, metric_violations = _check_measurement_metrics(entities, normalized_text)
     if metric_violations:
@@ -369,18 +356,29 @@ If no changes needed, return original entities with empty changes list."""
                     if label and label.lower() in change_lower:
                         kb_corrected_labels.add(label)
 
+        # Set of (label, type) tuples — handles same label with multiple types (e.g. berberine intake + intervention)
+        input_label_types = {
+            (e.get("label", e.get("metric", e.get("linked_to", e.get("raw_text", "")))), e.get("type"))
+            for e in to_validate
+        }
         input_types = {
             e.get("label", e.get("metric", e.get("linked_to", e.get("raw_text", "")))): e.get("type")
             for e in to_validate
         }
         for e in validated:
             label = e.get("label", e.get("metric", e.get("linked_to", e.get("raw_text", ""))))
+            current_type = e.get("type")
+            # (label, type) pair exists in input → no change, skip guard
+            if (label, current_type) in input_label_types:
+                continue
             original_type = input_types.get(label)
-            if original_type and e.get("type") != original_type:
+            if original_type and current_type != original_type:
                 # Exception 1: action field confirms intake
                 if e.get("action") in ("took", "did_not_take"):
                     print(f"⚙️  Guard allowing intake correction for '{label}': action field confirms intake")
                     all_changes.append(f"Structure type error corrected: '{label}' was {original_type}, action field confirms intake")
+                # Exception 3: intervention correction — structure LLM wrote intake but mention was intervention
+                
                 # Exception 2: KB explicitly instructed this type correction
                 elif label in kb_corrected_labels:
                     print(f"⚙️  Guard allowing KB type correction for '{label}': {original_type} → {e['type']}")

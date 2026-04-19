@@ -8,6 +8,8 @@ from core.normalize import normalize_transcript
 from core.mention import extract_mentions
 from core.structure import structure_mentions
 from core.validate import validate_entities
+from core.intervention_enricher import extract_intervention_signals
+from core.schema_enforcer import enforce_schema
 from core.db import (
     save_transcript,
     save_entities,
@@ -386,7 +388,24 @@ elif st.session_state.step == "review_mentions":
 
             with col1:
                 st.text_input("Raw mention", mention.get("raw_mention", ""), key=f"raw_{i}", disabled=True)
-                st.text_input("Context", mention.get("context", ""), key=f"ctx_{i}", disabled=True)
+
+                # Show transcript snippet anchored to inferred_as (original Whisper word)
+                # if present, otherwise fall back to raw_mention.
+                # This ensures "Korea" → "nocturia" shows the correct transcript location.
+                transcript_text = st.session_state.get("normalized", "") or ""
+                search_term = mention.get("inferred_as") or mention.get("raw_mention", "")
+                snippet = ""
+                if search_term and transcript_text:
+                    idx = transcript_text.lower().find(search_term.lower())
+                    if idx != -1:
+                        start = max(0, idx - 60)
+                        end = min(len(transcript_text), idx + len(search_term) + 60)
+                        snippet = "..." + transcript_text[start:end].strip() + "..."
+                if snippet:
+                    st.caption(f"📍 Transcript: *\"{snippet}\"*")
+                else:
+                    st.text_input("Context", mention.get("context", ""), key=f"ctx_{i}", disabled=True)
+
                 if temp_ev:
                     st.caption(f"⏱ temporal: {temp_ev}")
                 reasoning = mention.get("reasoning", "")
@@ -401,6 +420,7 @@ elif st.session_state.step == "review_mentions":
                 delete = st.checkbox("🗑️ Remove", key=f"del_{i}")
 
             updated_mention = mention.copy()
+            updated_mention["_original_type"] = candidate_type  # UI'da gösterilen type
             updated_mention["candidate_type"] = new_type
             updated_mention["user_reviewed"] = True
 
@@ -427,13 +447,11 @@ elif st.session_state.step == "review_mentions":
                         example_before={"candidate_type": original_type, "raw_mention": raw}
                     )
 
+            # YENİ
             for updated in updated_mentions:
                 raw = updated.get("raw_mention", "")
                 new_type = updated.get("candidate_type", "other")
-                original = original_mentions.get(raw, {})
-                original_type = original.get("candidate_type", "other")
-                if original_type not in CANDIDATE_TYPES:
-                    original_type = "other"
+                original_type = updated.pop("_original_type", new_type)  # UI'da gösterilen type
                 if new_type != original_type:
                     save_knowledge(
                         original_text=raw,
@@ -448,69 +466,53 @@ elif st.session_state.step == "review_mentions":
 
             with st.spinner("Structuring entities (Stage 2)..."):
                 entities = structure_mentions(updated_mentions, st.session_state.normalized)
+            with st.spinner("Applying schema rules (Stage 2b)..."):
+                entities, enforcer_violations = enforce_schema(entities)
+                if enforcer_violations:
+                    print(f"⚙️  schema_enforcer: {len(enforcer_violations)} violation(s)")
+
+            # Apply event_date BEFORE enricher and validate so all downstream stages
+            # see correct event_date. structure.py hint mechanism covers most cases;
+            # this is the backstop for any entity still missing event_date.
+            def _ed_labels_match(raw: str, entity_label: str) -> bool:
+                STOP = {"course", "protocol", "supplement", "dose", "medication",
+                        "breakfast", "lunch", "dinner", "meal"}
+                ta = {t for t in raw.split() if t not in STOP and len(t) > 2}
+                tb = {t for t in entity_label.split() if t not in STOP and len(t) > 2}
+                if ta & tb:
+                    return True
+                return raw in entity_label or entity_label in raw
+
+            EVENT_DATE_TYPES = {"meal", "symptom", "intake", "activity", "machine"}
+            for entity in entities:
+                etype = entity.get("type")
+                if etype not in EVENT_DATE_TYPES:
+                    continue
+                if entity.get("event_date"):
+                    continue  # structure.py already filled — do not overwrite
+                label = entity.get("label", "").lower()
+                for m in updated_mentions:
+                    if m.get("candidate_type") != etype:
+                        continue
+                    m_raw = m.get("raw_mention", "").lower()
+                    if _ed_labels_match(m_raw, label):
+                        if m.get("temporal_evidence") == "explicit_past":
+                            edl = m.get("event_date_label")
+                            if edl:
+                                entity["event_date"] = edl
+                                print(f"⚙️  app.py event_date ({etype}): '{entity.get('label')}' → '{edl}'")
+                        break
+
+            with st.spinner("Enriching interventions (Stage 2c)..."):
+                intervention_signals = extract_intervention_signals(entities, st.session_state.normalized)
+                if intervention_signals:
+                    from core.schema_enforcer import apply_enrichment_only
+                    entities = apply_enrichment_only(entities, intervention_signals)
             with st.spinner("Validating entities (Stage 3)..."):
                 entities, validation_changes = validate_entities(entities, st.session_state.normalized)
 
-            # Attach raw_mention info after validation — validator strips unknown fields
-            # For each entity, find if a mention's inferred_as matches the label
             from core.db import _get_kb_labels_simple
             kb_labels = _get_kb_labels_simple()
-
-            # Build event_date hint map from mentions
-            # For same label (e.g. two breakfasts), track both yesterday and today
-            event_date_hints = []  # list of (raw_mention, hint)
-            for m in updated_mentions:
-                if m.get("candidate_type") == "meal":
-                    reasoning = m.get("reasoning", "").lower()
-                    context = m.get("context", "").lower()
-                    raw = m.get("raw_mention", "").lower()
-                    if "yesterday" in reasoning or "yesterday" in context:
-                        event_date_hints.append((raw, "yesterday"))
-                    elif "this morning" in reasoning or "today" in reasoning:
-                        event_date_hints.append((raw, None))  # today = null
-                    else:
-                        event_date_hints.append((raw, None))
-
-            # Apply event_date hints to meal entities in order
-            meal_entities = [e for e in entities if e.get("type") == "meal"]
-            meal_hints = [h for h in event_date_hints]  # same order as mentions
-
-            for i, entity in enumerate(meal_entities):
-                if not entity.get("event_date") and i < len(meal_hints):
-                    raw, hint = meal_hints[i]
-                    if hint:
-                        entity["event_date"] = hint
-                        print(f"⚙️  app.py event_date: meal '{entity.get('label')}' → '{hint}'")
-
-            # Apply event_date hints to symptom entities
-            for entity in entities:
-                if entity.get("type") == "symptom" and not entity.get("event_date"):
-                    label = entity.get("label", "").lower()
-                    for m in updated_mentions:
-                        if m.get("candidate_type") == "symptom":
-                            m_raw = m.get("raw_mention", "").lower()
-                            if m_raw == label or label in m_raw or m_raw in label:
-                                reasoning = m.get("reasoning", "").lower()
-                                context = m.get("context", "").lower()
-                                if "yesterday" in reasoning or "yesterday" in context:
-                                    entity["event_date"] = "yesterday"
-                                    print(f"⚙️  app.py event_date: symptom '{entity.get('label')}' → 'yesterday'")
-                                break
-
-            # Apply event_date hints to intake entities
-            for entity in entities:
-                if entity.get("type") == "intake" and not entity.get("event_date"):
-                    label = entity.get("label", "").lower()
-                    for m in updated_mentions:
-                        if m.get("candidate_type") == "intake":
-                            m_raw = m.get("raw_mention", "").lower()
-                            if m_raw == label or label in m_raw or m_raw in label:
-                                reasoning = m.get("reasoning", "").lower()
-                                context = m.get("context", "").lower()
-                                if "yesterday" in reasoning or "yesterday" in context:
-                                    entity["event_date"] = "yesterday"
-                                    print(f"⚙️  app.py event_date: intake '{entity.get('label')}' → 'yesterday'")
-                                break
 
             for entity in entities:
                 label = entity.get("label", entity.get("metric", entity.get("linked_to", "")))

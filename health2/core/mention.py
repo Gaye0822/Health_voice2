@@ -15,7 +15,7 @@ except ImportError:
 
 CANDIDATE_TYPES = [
     "intake", "symptom", "activity", "machine", "device",
-    "measurement", "meal", "outcome", "theory", "outside", "context", "other"
+    "measurement", "meal", "intervention", "outcome", "theory", "outside", "context", "other"
 ]
 
 
@@ -308,7 +308,21 @@ intervention
   An intervention spans days or weeks — it is not a single event.
 
   Ask these two questions:
-  1. Does this have a beginning AND an expected end (even if vague)?
+  1. Does this have a beginning AND an expected end that is explicitly stated
+     as a specific duration
+     Uncertain or speculative durations DO NOT qualify:
+     "maybe a few weeks", "not sure how long", "over a month", "indefinitely" → NOT sufficient.
+     Can you convert the stated duration to an exact number of days?
+     "10 days" → 10 ✅ → qualifies
+     "two weeks" → 14 ✅ → qualifies
+     "a month" → 30 ✅ → qualifies
+     "over a month" → 30+? ❌ → NOT convertible → omit intervention, intake only
+     "a few weeks" → 14? 21? ❌ → NOT convertible → intake only
+     "up to 4.5mg" → not a duration at all ❌ → intake only
+     "he said work up to X over a month" → NOT convertible ❌ → intake only
+     If you cannot write a single exact integer → do not extract as intervention.
+     
+    
   2. Is this a protocol or course — not just a one-time action?
   If both yes → intervention.
   If either no → intake (single dose or substance) or activity (single session).
@@ -318,12 +332,48 @@ intervention
   - "Started a peptide course" → intervention
   - "Doing a 30-day elimination diet" → intervention
   - "FMT protocol" → intervention (only if multi-session series is implied)
+  - "I'm just gonna do 10 days at 100 mg until someone tells me differently" → intervention
+    The "gonna" here is a protocol decision, not a future plan — the user has already
+    started (first dose taken) and is declaring the full course. Extract as intervention.
+
+  PROTOCOL DECLARATION RULE:
+  When the user states a dosing schedule AND has already begun taking it, this is an
+  intervention even if phrased with "gonna", "going to", or "I'll just do X days".
+  The key signal: a duration + a dose + evidence that it has already started.
+  "I'm just gonna do 10 days at 100 mg" after mentioning "last night I took my second dose"
+  → already started + declared duration → intervention ✅
+
+  INTERVENTION + INTAKE COEXISTENCE RULE:
+  When a substance appears both as a protocol declaration AND as a specific dose event,
+  extract BOTH as separate mentions — they are not duplicates, they describe different things.
+  - intervention mention → captures the protocol: duration, total dose, course intent
+  - intake mention → captures the specific dose event: when it was taken, how much, which dose
+  These two mentions must always coexist when both signals are present. One does not
+  replace the other. The intake record is what enables compliance tracking day by day.
+  Example:
+  "last night around 9 PM I took my second 100 mg dose... I'm just gonna do 10 days at 100 mg"
+  → intervention: doxycycline course (10 days, 100 mg) ✅
+  → intake: doxycycline, took, 100 mg, 9 PM, yesterday (second dose) ✅
+  Both must be extracted. Never collapse them into one.
+
+  DURATION RULE:
+  duration_days — carry the user's exact words only. Never convert or approximate.
+  "10 days" → carry as "10 days" ✅
+  "over a month", "a few weeks", "maybe 30 days", "not sure how long" → these are
+  vague or open-ended — do NOT convert to a number. Carry exact words or omit.
+  Structure.py handles the integer conversion; mention.py must not pre-interpret.
 
   These are NOT interventions:
   - "Had the FMT treatment yesterday" → intake (single session, no protocol implied)
   - "Took paracetamol" → intake
   - "Did Novothor" → machine (single session)
   - "Got an IV" → intake (single dose)
+  - "I'm going to start antibiotics tomorrow" → future_plan (not yet started)
+  - "I might do this for a few weeks" → intake (uncertain duration, no declared endpoint)
+  - "Not sure how long I'll keep taking this" → intake (open-ended, no committed protocol)
+  - "Maybe over a month" → intake (speculative duration, not a declared course)
+  - "he said take up to 4.5 over a month" → intake only (provider-declared titration schedule,
+    duration is the provider's instruction not a declared protocol endpoint — no intervention)
 
   When in doubt: if the user describes a single completed event → intake or activity.
   Intervention requires explicit multi-session or protocol language.
@@ -442,6 +492,17 @@ outside
   - User addresses the team, another person, or the system
   - User mentions procurement, logistics, or operational matters
 
+  EMBEDDED DEVICE ISSUES — do not miss these:
+  Device problems often appear as subordinate clauses inside sentences primarily
+  about something else. Always scan the full sentence for device failure signals,
+  even when the main topic is an activity or measurement.
+  Examples:
+  "zone two is recorded in WHOOP because again polar wasn't working for whatever reason"
+  → main topic: zone two activity. But "polar wasn't working" = device_failure → extract outside ✅
+  "used Eight Sleep because Oura was dead" → Oura failure embedded in Eight Sleep mention → outside ✅
+  "WHOOP picked it up since polar was off" → polar failure = outside ✅
+  Do not let the surrounding activity context cause you to skip the device issue.
+
   DEVICE_FAILURE vs SOURCE_DISCREPANCY — answer this before assigning subtype:
   "Is there a specific, documented, quantified malfunction?"
 
@@ -497,6 +558,48 @@ explicit_today   — clearly happened today or in this session
                    Only use explicit_today if the action happened today or
                    is currently happening right now.
 
+explicit_past    — happened on a specific named past day, not today
+                   "yesterday", "last night", "on Friday", "two days ago", "last week"
+                   Use this when the user clearly describes something that happened
+                   before today's recording session.
+                   REQUIRED: also fill event_date_label with the user's own words.
+                   Examples:
+                   "yesterday I did a cold plunge" → explicit_past, event_date_label: "yesterday"
+                   "had the FMT treatment last Friday" → explicit_past, event_date_label: "last Friday"
+                   "took paracetamol the first two nights" → explicit_past, event_date_label: "the first two nights"
+                   "my stomach was in pain all day yesterday" → explicit_past, event_date_label: "yesterday"
+                   CRITICAL: Do NOT use explicit_past for the current recording session.
+                   "Last night" as part of today's report (e.g. sleep last night) may still
+                   be explicit_today if the user is describing a device-tracked overnight period
+                   that is part of today's health session. Use judgment based on context.
+
+                   RETRACTION / COMPARISON EXCEPTION:
+                   "yesterday" does not always mean the event happened yesterday.
+                   Watch for these patterns before assigning explicit_past:
+
+                   - Retraction: "I take back X as yesterday", "to correct what I said yesterday"
+                     → user is retracting a prior statement. The finding is current → explicit_today
+                   - Comparison: "more swollen than yesterday", "worse than yesterday",
+                     "better than yesterday", "same as yesterday"
+                     → "yesterday" is a comparison point, not when the event occurred → explicit_today
+                   - Contrast: "unlike yesterday", "not like yesterday"
+                     → current state being contrasted with yesterday → explicit_today
+
+                   Only use explicit_past when "yesterday" or a past day name is the PRIMARY
+                   temporal anchor for WHEN the event occurred — not when it appears as a
+                   comparison point, retraction signal, or contrast marker.
+
+                   Examples — explicit_today (NOT explicit_past):
+                   "swollen lymph nodes, more swollen than yesterday" → explicit_today
+                   "I take back what I said, they're more swollen than yesterday" → explicit_today
+                   "feeling worse than yesterday" → explicit_today
+                   "better than I was yesterday" → explicit_today
+
+                   Examples — explicit_past (event happened yesterday):
+                   "yesterday I did a cold plunge" → explicit_past, event_date_label: "yesterday"
+                   "had terrible gas all day yesterday" → explicit_past, event_date_label: "yesterday"
+                   "my stomach was in pain yesterday, it's fine now" → explicit_past, event_date_label: "yesterday"
+
 active_regimen   — ongoing habit with no today confirmation
                    "I take", "I've been on", "I usually", "every night"
                    Use this when the user describes a pattern without confirming
@@ -516,10 +619,10 @@ and immediate context only. It cannot be inherited from a nearby mention.
 must be assessed independently. If no signal exists for meditation → unclear.
 
 Past events reported in today's note:
-"I took paracetamol the first two nights" → these are past completed facts,
-not today's events. Use explicit_today only if it happened today.
+"I took paracetamol the first two nights" → these are past completed facts.
+Use explicit_past (not explicit_today). Fill event_date_label: "the first two nights".
 If the past event is specific and factual, it can still be extracted —
-but temporal_evidence should reflect when it actually happened, not when it was reported.
+temporal_evidence must reflect when it actually happened, not when it was reported.
 
 ─────────────────────────────────────────
 REASONING FIELD — REQUIRED FOR EVERY MENTION
@@ -543,6 +646,15 @@ Answer all:
 - Is this general energy, fatigue, weakness, or sleep difficulty? → If yes: OMIT
 - Did the user explicitly dismiss this? → If yes: OMIT
 - Is this an expected after-effect of an activity? → If yes: OMIT (activity notes)
+- Is the user using causal or explanatory language rather than reporting a finding?
+  "X is tied to Y", "X is linked to Y", "X is connected to Y", "X is related to Y"
+  → user is explaining a relationship, not reporting a symptom → OMIT or theory
+- Is the user using a condition as an analogy, comparison, or pain scale reference
+  rather than reporting that they have it?
+  "pain like a migraine", "lymph nodes and migraines are super painful" (used as reference),
+  "like a knife through my leg" → these are rhetorical comparisons, not findings → OMIT
+  The test: is the user saying they currently have this condition, or using it to describe
+  the intensity of something else? If the latter → OMIT entirely.
 - Is this a named clinical finding the user is actively reporting as a problem? → If no: OMIT
 
 If symptom survives step 2 → extract as symptom.
@@ -551,9 +663,22 @@ If eliminated → note why and continue.
 STEP 3 — ELIMINATE theory:
 - Did the user make an explicit speculative claim in their own words? → If no: OMIT
 - Is this confusion, hope, dismissal, or emotional reaction? → If yes: OMIT
+- Is this logistical planning, scheduling, or procurement? → If yes: outside, not theory
+  "I'm thinking of going to Tokyo for a blood test", "should I see the dermatologist",
+  "I need to find a clinic" → operational/procurement → outside
 - Is this about the user's own body/health? → If no: outside
 
 If theory survives step 3 → extract as theory.
+
+STEP 3.5 — ELIMINATE intervention:
+If the candidate type seems like intervention, answer both:
+- Can you convert the duration to a single exact integer of days?
+  "over a month" → ❌ NOT convertible. "over" means more than — no exact number exists.
+  "a month" → 30 ✅ (exact)
+  "over a month" ≠ "a month" — "over" makes it open-ended, do not round down.
+- Is this the USER's own time commitment — not a provider's titration instruction?
+  "he said work up to 4.5 over a month" → provider instruction → ❌ → intake only, stop.
+If either fails → omit . NOT intervention Do not proceed to STEP 4. Stop here.
 
 STEP 4 — ASSIGN final type:
 State: "Final type: [type] because [one sentence reason]"

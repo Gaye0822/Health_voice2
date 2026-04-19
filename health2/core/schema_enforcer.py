@@ -15,20 +15,21 @@ Current rules:
 
 import re
 from typing import Optional
+from datetime import date
 
 # ─────────────────────────────────────────
 # VALID SCHEMA FIELDS PER TYPE
 # ─────────────────────────────────────────
 
 SCHEMA_FIELDS = {
-    "intake":       {"type", "label", "action", "dose", "unit", "time", "event_date", "category", "notes"},
-    "symptom":      {"type", "label", "status", "onset_time", "severity", "qualifier", "duration", "interval", "source", "notes"},
+    "intake":       {"type", "label", "action", "dose", "unit", "time", "event_date", "category", "is_intervention_dose", "day_of_protocol", "notes"},
+    "symptom":      {"type", "label", "status", "onset_time", "severity", "qualifier", "duration", "interval", "source", "event_date", "notes"},
     "activity":     {"type", "label", "start_time", "end_time", "duration", "status", "event_date", "notes"},
     "machine":      {"type", "label", "start_time", "end_time", "duration", "status", "event_date", "notes"},
     "device":       {"type", "label", "start_time", "status"},
     "measurement":  {"type", "metric", "value", "unit", "time", "source", "notes"},
-    "meal":         {"type", "label", "time", "eaten_out", "restaurant", "description"},
-    "intervention": {"type", "label", "start_date", "end_date", "status", "notes"},
+    "meal":         {"type", "label", "time", "eaten_out", "restaurant", "event_date", "description"},
+    "intervention": {"type", "label", "start_date", "end_date", "status", "duration_days", "day_of_protocol", "notes"},
     "outcome":      {"type", "linked_to", "what", "onset_time", "qualifier", "direction"},
     "test":         {"type", "label", "time", "status", "result", "notes"},
     "context":      {"type", "raw_text", "related_to"},
@@ -46,7 +47,8 @@ INVALID_TIME_PHRASES = [
 ]
 
 # Time field names across all entity types
-TIME_FIELDS = {"time", "start_time", "onset_time", "start_date", "end_date"}
+# Note: start_date is intentionally excluded — it is managed by calculate_day_of_protocol
+TIME_FIELDS = {"time", "start_time", "onset_time", "end_date"}
 
 
 # ─────────────────────────────────────────
@@ -283,6 +285,342 @@ def fix_sleep_duration_value(entity: dict) -> dict:
     return result
 
 
+
+
+# ─────────────────────────────────────────
+# DOSE NUMBER FROM NOTES
+# ─────────────────────────────────────────
+
+import re as _re
+
+DOSE_WORD_MAP = {
+    "first": 1, "second": 2, "third": 3, "fourth": 4,
+    "fifth": 5, "sixth": 6, "seventh": 7, "eighth": 8,
+    "ninth": 9, "tenth": 10,
+}
+
+def extract_dose_number_from_notes(notes: str) -> int | None:
+    """
+    Extract dose number from intake notes field.
+    "second dose" → 2, "3rd dose" → 3, "dose 4" → 4
+    """
+    if not notes or not isinstance(notes, str):
+        return None
+    s = notes.lower()
+
+    # "second dose", "third pill", "first shot" etc.
+    for word, num in DOSE_WORD_MAP.items():
+        if word in s and any(t in s for t in ("dose", "pill", "shot", "tablet", "injection")):
+            return num
+
+    # "2nd dose", "3rd dose", "4th dose"
+    m = _re.search(r"(\d+)(?:st|nd|rd|th)?\s+dose", s)
+    if m:
+        return int(m.group(1))
+
+    # "dose 2", "dose number 3"
+    m = _re.search(r"dose\s+(?:number\s+)?(\d+)", s)
+    if m:
+        return int(m.group(1))
+
+    return None
+
+# ─────────────────────────────────────────
+# DAY OF PROTOCOL CALCULATION
+# ─────────────────────────────────────────
+
+# Maps relative start_date phrases to day offsets (days before today)
+RELATIVE_DATE_OFFSETS = {
+    "this morning": 0,
+    "today": 0,
+    "tonight": 0,
+    "last night": 1,
+    "yesterday": 1,
+    "yesterday morning": 1,
+    "yesterday evening": 1,
+    "yesterday night": 1,
+    "the night before last": 2,
+    "two days ago": 2,
+    "2 days ago": 2,
+    "three days ago": 3,
+    "3 days ago": 3,
+    "four days ago": 4,
+    "4 days ago": 4,
+    "five days ago": 5,
+    "5 days ago": 5,
+    "six days ago": 6,
+    "6 days ago": 6,
+    "a week ago": 7,
+    "one week ago": 7,
+    "7 days ago": 7,
+    "two weeks ago": 14,
+    "2 weeks ago": 14,
+    "last week": 7,
+    "last month": 30,
+}
+
+
+def _resolve_start_date_to_iso(raw: str, today_date) -> "date | None":
+    """
+    Convert a start_date string to an ISO date object.
+
+    Handles:
+    - RELATIVE_DATE_OFFSETS map entries  ("yesterday", "two days ago", ...)
+    - Weekday names                      ("last Monday", "last Friday", "Monday")
+    - Already ISO format                 ("2025-04-17") — parsed and returned
+    - Unknown phrases                    → None (caller keeps raw string)
+    """
+    from datetime import date, timedelta
+    import re as _re
+
+    if not raw or not isinstance(raw, str):
+        return None
+
+    s = raw.strip().lower()
+
+    # Already ISO — parse and return
+    if _re.match(r"^\d{4}-\d{2}-\d{2}$", s):
+        try:
+            return date.fromisoformat(s)
+        except ValueError:
+            return None
+
+    # Direct map lookup
+    offset = RELATIVE_DATE_OFFSETS.get(s)
+    if offset is not None:
+        return today_date - timedelta(days=offset)
+
+    # "last <weekday>" or bare "<weekday>"
+    WEEKDAYS = {
+        "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+        "friday": 4, "saturday": 5, "sunday": 6,
+    }
+    m = _re.match(r"^(?:last\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)$", s)
+    if m:
+        target_wd = WEEKDAYS[m.group(1)]
+        days_back = (today_date.weekday() - target_wd) % 7
+        if days_back == 0:
+            days_back = 7  # "last Monday" on a Monday → 7 days ago
+        return today_date - timedelta(days=days_back)
+
+    return None
+
+
+def _labels_match(label_a: str, label_b: str) -> bool:
+    """
+    Token-based label matching for intervention/intake pairing.
+    Matches if any non-trivial token from one label appears in the other.
+
+    Examples:
+      "doxycycline" vs "doxycycline course"  → True
+      "FMT" vs "FMT protocol"               → True
+      "amoxicillin" vs "vitamin C"           → False
+    """
+    STOP_TOKENS = {"course", "protocol", "treatment", "therapy", "program",
+                   "supplement", "dose", "medication", "drug", "pill", "tablet"}
+
+    tokens_a = {t for t in label_a.lower().split() if t not in STOP_TOKENS and len(t) > 2}
+    tokens_b = {t for t in label_b.lower().split() if t not in STOP_TOKENS and len(t) > 2}
+
+    if tokens_a & tokens_b:
+        return True
+    if label_a.lower() in label_b.lower() or label_b.lower() in label_a.lower():
+        return True
+    return False
+
+
+def calculate_day_of_protocol(entity: dict, today_date=None) -> dict:
+    """
+    For intervention entities: convert start_date to ISO and compute day_of_protocol
+    as a fallback — runs before enricher, enricher results will overwrite if present.
+
+    Uses _resolve_start_date_to_iso which handles:
+    - Map entries ("yesterday", "two days ago", ...)
+    - Weekday names ("last Monday", "Friday", ...)
+    - Already-ISO dates (skipped — enricher already ran)
+    - Unknown phrases → no-op
+    """
+    from datetime import date, timedelta
+
+    if today_date is None:
+        today_date = date.today()
+
+    if entity.get("type") != "intervention":
+        return entity
+
+    result = dict(entity)
+    start_date_raw = result.get("start_date")
+
+    # Skip if already ISO — enricher already processed this
+    import re as _re
+    if start_date_raw and isinstance(start_date_raw, str) and _re.match(r"^\d{4}-\d{2}-\d{2}$", start_date_raw.strip()):
+        return result
+
+    start_date = _resolve_start_date_to_iso(start_date_raw, today_date)
+    if start_date is None:
+        return result  # Unknown phrase — leave as-is
+
+    day = (today_date - start_date).days + 1
+    if day < 1:
+        print(f"⚠️  schema_enforcer [fallback]: intervention '{result.get('label')}' — "
+              f"day_of_protocol={day} is invalid (start_date in the future?), skipping")
+        return result
+
+    result["start_date"] = start_date.isoformat()
+    result["day_of_protocol"] = day
+
+    duration_days = result.get("duration_days")
+    if isinstance(duration_days, int) and not result.get("end_date"):
+        end_date = start_date + timedelta(days=duration_days - 1)
+        result["end_date"] = end_date.isoformat()
+
+    print(f"⚙️  schema_enforcer [fallback]: intervention '{result.get('label')}' → "
+          f"start_date={result['start_date']}, day_of_protocol={result['day_of_protocol']}")
+
+    return result
+
+
+def enrich_intervention_from_signals(entities: list, signals: list, today_date=None) -> list:
+    """
+    Deterministic enrichment from intervention_enricher signals.
+
+    For each signal:
+    - intervention entity: writes start_date (ISO), day_of_protocol, duration_days, end_date
+    - intake entity: sets is_intervention_dose=True and calculates day_of_protocol
+
+    day_of_protocol logic:
+      If dose_number + event_date_raw both known:
+        dose_date  = resolve(event_date_raw)
+        start_date = dose_date - (dose_number - 1)
+      If only event_date_raw known (no dose_number):
+        start_date = resolve(event_date_raw)   # treat as protocol start
+      intervention.day_of_protocol = (today - start_date).days + 1
+      intake.day_of_protocol       = (intake_date - start_date).days + 1
+
+    Guards:
+    - day_of_protocol < 1 → skip (data inconsistency, do not write garbage)
+    - intake event_date as ISO string → handled via date.fromisoformat()
+    """
+    from datetime import date, timedelta
+
+    if today_date is None:
+        today_date = date.today()
+
+    if not signals:
+        return entities
+
+    for signal in signals:
+        substance = signal.get("substance_label", "").lower()
+        dose_number = signal.get("dose_number")
+        event_date_raw = signal.get("event_date_raw")
+        duration_days = signal.get("duration_days")
+        is_completed = signal.get("is_completed", False)
+
+        # ── Compute start_date from enricher signal ──────────────────────
+        start_date = None
+        if event_date_raw:
+            dose_date = _resolve_start_date_to_iso(event_date_raw, today_date)
+            if dose_date is not None:
+                if isinstance(dose_number, int) and dose_number >= 1:
+                    start_date = dose_date - timedelta(days=dose_number - 1)
+                else:
+                    start_date = dose_date  # no dose_number → event_date IS protocol start
+        elif isinstance(dose_number, int) and dose_number >= 1:
+            # event_date_raw yok ama dose_number biliniyor → bugün day N kabul et
+            start_date = today_date - timedelta(days=dose_number - 1)
+            print(f"⚙️  schema_enforcer: dose_number={dose_number}, no event_date_raw → "
+                  f"assuming today is day {dose_number}, start_date={start_date.isoformat()}")
+
+        
+        # ── Fallback: enricher signal yetersizse intervention entity'nin
+        #    mevcut start_date'ini kullan (calculate_day_of_protocol zaten yazmış olabilir)
+        if start_date is None:
+            for ent in entities:
+                if ent.get("type") != "intervention":
+                    continue
+                if not _labels_match(substance, ent.get("label", "").lower()):
+                    continue
+                existing = ent.get("start_date")
+                if existing and isinstance(existing, str) and re.match(r"^\d{4}-\d{2}-\d{2}$", existing.strip()):
+                    from datetime import date as _date_cls
+                    try:
+                        start_date = _date_cls.fromisoformat(existing.strip())
+                        print(f"⚙️  schema_enforcer: intervention '{ent.get('label')}' — "
+                              f"using existing start_date={existing} as fallback for intake enrichment")
+                    except ValueError:
+                        pass
+                break
+
+        # ── Update intervention entity ────────────────────────────────────
+        for entity in entities:
+            if entity.get("type") != "intervention":
+                continue
+            if not _labels_match(substance, entity.get("label", "").lower()):
+                continue
+
+            if start_date:
+                day = (today_date - start_date).days + 1
+                if day < 1:
+                    print(f"⚠️  schema_enforcer: intervention '{entity.get('label')}' — "
+                          f"computed day_of_protocol={day} is invalid, skipping date fields")
+                else:
+                    entity["start_date"] = start_date.isoformat()
+                    entity["day_of_protocol"] = day
+                    print(f"⚙️  schema_enforcer: intervention '{entity.get('label')}' → "
+                          f"start_date={start_date.isoformat()}, day_of_protocol={day}")
+
+                    if isinstance(duration_days, int):
+                        entity["duration_days"] = duration_days
+                        end_date = start_date + timedelta(days=duration_days - 1)
+                        entity["end_date"] = end_date.isoformat()
+                        print(f"⚙️  schema_enforcer: intervention '{entity.get('label')}' → "
+                              f"end_date={end_date.isoformat()}")
+            elif isinstance(duration_days, int):
+                entity["duration_days"] = duration_days
+
+            if is_completed:
+                entity["status"] = "completed"
+                if not entity.get("end_date"):
+                    entity["end_date"] = today_date.isoformat()
+                print(f"⚙️  schema_enforcer: intervention '{entity.get('label')}' → "
+                      f"status=completed, end_date={entity['end_date']}")
+            break
+
+        # ── Update matching intake entities ──────────────────────────────
+        # is_intervention_dose is written regardless of whether start_date is known.
+        # day_of_protocol requires start_date — skipped if not available.
+        for entity in entities:
+            if entity.get("type") != "intake":
+                continue
+            if not _labels_match(substance, entity.get("label", "").lower()):
+                continue
+
+            entity["is_intervention_dose"] = True
+
+            if start_date is None:
+                print(f"⚙️  schema_enforcer: intake '{entity.get('label')}' → "
+                      f"is_intervention_dose=True (day_of_protocol skipped — start_date unknown)")
+                continue
+
+            intake_event_raw = entity.get("event_date") or ""
+            intake_date = _resolve_start_date_to_iso(intake_event_raw, today_date)
+
+            if intake_date is None:
+                # event_date missing or unresolvable → assume today
+                intake_date = today_date
+
+            day = (intake_date - start_date).days + 1
+            if day < 1:
+                print(f"⚠️  schema_enforcer: intake '{entity.get('label')}' — "
+                      f"computed day_of_protocol={day} is invalid, skipping")
+            else:
+                entity["day_of_protocol"] = day
+                suffix = f" (event_date: {intake_event_raw})" if intake_event_raw else " (today)"
+                print(f"⚙️  schema_enforcer: intake '{entity.get('label')}' → "
+                      f"is_intervention_dose=True, day_of_protocol={day}{suffix}")
+
+    return entities
+
 # ─────────────────────────────────────────
 # MAIN ENFORCER
 # ─────────────────────────────────────────
@@ -290,9 +628,10 @@ def fix_sleep_duration_value(entity: dict) -> dict:
 def enforce_schema(entities: list) -> tuple:
     """
     Apply all deterministic fixes to a list of entities.
+    Returns (clean_entities, violations_log).
 
-    Returns:
-        (clean_entities, violations_log)
+    Intervention enrichment is handled separately via apply_enrichment_only()
+    after enforce_schema() completes — never pass signals here.
     """
     clean = []
     violations = []
@@ -322,6 +661,9 @@ def enforce_schema(entities: list) -> tuple:
         e = fix_sleep_duration_value(e)
         e = fix_measurement_value(e)
 
+        # 7. Calculate day_of_protocol for intervention and intake
+        e = calculate_day_of_protocol(e)
+
         # 5. Remove entities flagged for removal
         if e.pop("_remove", False):
             reason = e.pop("_remove_reason", "schema violation")
@@ -335,6 +677,20 @@ def enforce_schema(entities: list) -> tuple:
 
     return clean, violations
 
+
+
+def apply_enrichment_only(entities: list, intervention_signals: list) -> list:
+    """
+    Apply ONLY intervention enrichment signals to an already-enforced entity list.
+    Does NOT re-run full enforce_schema — avoids double-applying field fixes
+    and prevents fallback calculations from overwriting enricher results.
+
+    Call this after enforce_schema() when enricher signals are ready.
+    Returns the updated entity list.
+    """
+    if not intervention_signals:
+        return entities
+    return enrich_intervention_from_signals(entities, intervention_signals)
 
 def log_violations(violations: list):
     if violations:

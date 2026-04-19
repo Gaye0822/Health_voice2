@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, field_validator
 
 TemporalEvidence = Literal[
     "explicit_today",
+    "explicit_past",      # happened on a specific past day (yesterday, last Friday, etc.)
     "active_regimen",
     "future_plan",
     "consultation_relay",
@@ -35,6 +36,7 @@ CandidateType = Literal[
     "device",
     "measurement",
     "meal",
+    "intervention",
     "theory",
     "outside",
     "context",
@@ -48,6 +50,7 @@ class Mention(BaseModel):
     confidence: Literal["high", "low"]
     context: str
     temporal_evidence: TemporalEvidence
+    event_date_label: Optional[str] = None  # filled only when temporal_evidence = "explicit_past"; user own words: "yesterday", "Friday", "last week"
     reasoning: str  # chain of thought — why this was extracted and classified this way
 
 class MentionOutput(BaseModel):
@@ -60,8 +63,8 @@ class MentionOutput(BaseModel):
 
 IntakeAction = Literal["took", "did_not_take"]
 IntakeCategory = Literal["supplement", "prescription", "OTC", "food"]
-ActivityStatus = Literal["completed", "planned", "incomplete", "did_not_complete"]
-MachineStatus = Literal["used", "planned", "did_not_use"]
+ActivityStatus = Literal["completed", "incomplete", "did_not_complete"]
+MachineStatus = Literal["used", "did_not_use"]
 InterventionStatus = Literal["active", "completed", "unknown"]
 OutcomeDirection = Literal["positive", "negative", "mixed", "unknown"]
 TestStatus = Literal["planned", "done"]
@@ -76,6 +79,8 @@ class IntakeEntity(BaseModel):
     time: Optional[str] = None
     event_date: Optional[str] = None  # "yesterday", specific date if intake was not today
     category: IntakeCategory
+    is_intervention_dose: Optional[bool] = None  # True if this intake is part of a multi-day protocol
+    day_of_protocol: Optional[int] = None        # calculated by schema_enforcer; which day of the protocol this intake belongs to
     notes: Optional[str] = None
 
 
@@ -155,9 +160,11 @@ class MealEntity(BaseModel):
 class InterventionEntity(BaseModel):
     type: Literal["intervention"]
     label: str
-    start_date: Optional[str] = None
+    start_date: Optional[str] = None   # LLM writes user's words ("two days ago", "last Monday"); schema_enforcer converts to date
     end_date: Optional[str] = None
-    status: InterventionStatus
+    status: InterventionStatus = "active"  # default: active — most interventions are ongoing when reported
+    duration_days: Optional[int] = None   # total protocol length in days ("10 days" → 10); filled by LLM if stated
+    day_of_protocol: Optional[int] = None  # calculated by schema_enforcer; which day of the protocol is today
     notes: Optional[str] = None
 
 
@@ -191,9 +198,13 @@ class TheoryEntity(BaseModel):
     linked_to_type: Optional[str] = None
 
 
+OutsideSubtype = Literal["device_failure", "source_discrepancy", "procurement", "operational", "general"]
+
 class OutsideEntity(BaseModel):
     type: Literal["outside"]
     raw_text: str
+    subtype: OutsideSubtype = "general"
+    notes: Optional[str] = None
 
 
 # ─────────────────────────────────────────
@@ -254,7 +265,7 @@ def get_mention_tool_schema() -> dict:
 
 ENTITY_SCHEMAS = {
     "intake": {
-        "fields": ["label", "action", "dose", "unit", "time", "category", "notes"],
+        "fields": ["label", "action", "dose", "unit", "time", "category", "is_intervention_dose", "day_of_protocol", "notes"],
         "actions": ["took", "did_not_take"],
         "categories": ["supplement", "prescription", "OTC", "food"]
     },
@@ -263,11 +274,11 @@ ENTITY_SCHEMAS = {
     },
     "activity": {
         "fields": ["label", "start_time", "duration", "status", "notes"],
-        "statuses": ["completed", "planned", "incomplete"]
+        "statuses": ["completed", "incomplete", "did_not_complete"]
     },
     "machine": {
         "fields": ["label", "start_time", "duration", "status", "notes"],
-        "statuses": ["used", "planned"]
+        "statuses": ["used", "did_not_use"]
     },
     "device": {
         "fields": ["label", "start_time", "status"],
@@ -299,6 +310,7 @@ ENTITY_SCHEMAS = {
         "fields": ["raw_text", "linked_to_label", "linked_to_type"]
     },
     "outside": {
-        "fields": ["raw_text"]
+        "fields": ["raw_text", "subtype", "notes"],
+        "subtypes": ["device_failure", "source_discrepancy", "procurement", "operational", "general"]
     }
 }

@@ -49,6 +49,7 @@ For each mention, work through these questions before writing the entity:
    If a mention came in as "intake" → it must leave as "intake".
    If a mention came in as "symptom" → it must leave as "symptom".
    If a mention came in as "outcome" → it must leave as "outcome".
+   If a mention came in as "intervention" -> it must leave as "intervention".
 
    The relationship between entities (e.g. paracetamol reducing nocturia) may already
    be captured as a separate outcome or theory entity in the same mention list.
@@ -57,6 +58,34 @@ For each mention, work through these questions before writing the entity:
    The ONLY exception: if the candidate_type is "other" → use your judgment to
    determine the best fitting schema, or omit if not structurable.
 
+   ── INTERVENTION CANDIDATE TYPE — MANDATORY SCHEMA BRANCH ──
+   Before processing any mention, check: is candidate_type = "intervention"?
+   If NO - continue.
+   If YES — stop.DO NOT CHANGE THE ENTITI TYPE . Do not read further into this section. Apply these rules immediately:
+
+
+   STEP 1: Write type: "intervention". No other type is permitted.
+   STEP 2: The substance name may sound like something you would put in an intake entity
+           (e.g. "doxycycline", "BPC-157", "PHGG"). Ignore that. The schema branch
+           is intervention. Fill intervention fields only:
+           label, start_date, end_date, status, duration_days, day_of_protocol, notes.
+   STEP 3: Do NOT write action, dose, unit, category, or any intake field.
+           These fields do not exist on an intervention entity.
+   STEP 4: status defaults to "active" unless the transcript says the course is finished.
+   STEP 5: start_date — write the user's exact words. Never convert to a date.
+           "two days ago" → start_date: "two days ago"
+           "last night" → start_date: "last night"
+           "last Monday" → start_date: "last Monday"
+   STEP 6: duration_days — integer only if explicitly stated. Otherwise null.
+           "10 days" → duration_days: 10. "a month" → null.
+   STEP 7: day_of_protocol — always null. Schema_enforcer calculates this.
+
+   Correct output for an intervention mention:
+     { "type": "intervention", "label": "doxycycline course", "status": "active",
+       "start_date": "last night", "duration_days": 10, "day_of_protocol": null }
+   Wrong output — NEVER produce this for an intervention candidate_type:
+     { "type": "intake", "label": "doxycycline", "action": "took", "category": "prescription" }
+
 2. WHAT ACTUALLY HAPPENED?
    Use the temporal_evidence field:
    - explicit_today → structure normally
@@ -64,6 +93,9 @@ For each mention, work through these questions before writing the entity:
      same-session confirmation (specific time, "today", "this morning", "just")
      Provider advice to continue is NOT same-session confirmation.
      If no confirmation → omit
+     EXCEPTION: intervention entities are always structured regardless of
+     active_regimen — a multi-day protocol does not need same-session confirmation.
+     See the INTERVENTION CANDIDATE TYPE block in step 1 for full schema rules.
    - future_plan → omit entirely
    - consultation_relay → omit entirely, EXCEPT factual test results and
      factual measurements which can be extracted normally
@@ -142,23 +174,14 @@ For each mention, work through these questions before writing the entity:
    - general: device opinions, general complaints with no specific documented impact.
      "WHOOP sucks" → general
 
-   INTERVENTION vs INTAKE — critical distinction:
-   An intervention is a multi-session treatment protocol with a defined start and expected end.
-   A single completed health event is NEVER an intervention — it is intake, activity, or machine.
+
 
    These are interventions:
    - "I've been on antibiotics for 5 days" → intervention
    - "Started a peptide course last month" → intervention
    - "Doing a 30-day FMT protocol" → intervention (multi-session explicitly stated)
 
-   These are NOT interventions — use intake, activity, or machine:
-   - "Had the FMT treatment yesterday" → intake (single session)
-   - "Got an IV" → intake
-   - "Did Novothor at 4pm" → machine
-   - "Took paracetamol" → intake
-
-   Rule: if the user describes a single completed event → never intervention.
-   Intervention requires explicit multi-session or protocol language.
+  
 
    For symptoms specifically: ask whether this is a body state the user is currently
    experiencing, or whether it names a pathogen, virus, or infection source.
@@ -177,6 +200,14 @@ For each mention, work through these questions before writing the entity:
      "no nocturia last night", "did not have nocturia", "nocturia absent"
      Only apply to recurring tracked phenomena — things the user monitors over time.
      Do NOT apply to incidental symptoms: "no headache today" → omit entirely.
+
+     TREATMENT RESPONSE — do NOT use absent for symptom relief:
+     If a symptom was eliminated or reduced by a treatment, this is an OUTCOME, not absent.
+     "immediately got rid of the pain in my left eye" (after doxycycline) → outcome entity,
+       linked_to: doxycycline, what: "left eye pain", direction: positive
+     "paracetamol reduced my nocturia" → outcome, not absent
+     The symptom being absent due to treatment is a health outcome, not a simple negation.
+     Ask: did something cause this to go away? If yes → outcome. If just not present → absent.
 
    not mentioned → do not create an entity (silence = unknown, not absent)
 
@@ -233,7 +264,7 @@ NULL RULE:
 ACTIVITY STATUS RULE:
 - status is REQUIRED for every activity and machine entity — never omit it
 - status: "completed" → activity happened and is done (default for past events)
-- status: "planned" → activity is intended but not yet done (future plans — usually filtered out)
+- status: "planned" → DO NOT USE. Future plans are omitted entirely before structuring. If a mention arrived here with future intent, omit it.
 - status: "incomplete" → activity was started but not finished (e.g. cut short)
 - status: "did_not_complete" → activity was explicitly NOT done / skipped entirely
   Use when user says "didn't lift", "didn't do PEMF", "couldn't get a cold plunge in",
@@ -308,6 +339,24 @@ END_TIME FIELD (activity and machine only):
 - If only duration is stated → fill duration, leave end_time null
 - If only start_time is stated → leave end_time null
 
+DURATION_DAYS FIELD (intervention only):
+- Fill if the user explicitly states the total length of the protocol
+- "10 days at 100 mg" → duration_days: 10
+- "a 30-day course" → duration_days: 30
+- If not stated → null
+
+START_DATE FIELD (intervention only):
+- Write the user's own words exactly as stated — do NOT convert to a date
+- "two days ago" → start_date: "two days ago"
+- "last Monday" → start_date: "last Monday"
+- "last night" → start_date: "last night"
+- "this morning" → start_date: "this morning"
+- schema_enforcer will convert this to an actual date using today's date
+- If not stated → null
+
+DAY_OF_PROTOCOL FIELD (intervention only):
+- Leave null — this is calculated by schema_enforcer, never by the LLM
+
 EVENT_DATE FIELD (intake, activity, machine, symptom):
 - Use when the event did NOT happen today — it happened on a specific past day
 - Fill with the user's own words: "yesterday", "Friday", "last week"
@@ -345,6 +394,30 @@ MERGE RULE:
   create separate entities for each with different timing in notes.
   "two cycles of onsen cold plunge" → onsen (entity 1) + cold plunge (entity 2),
   notes: "two cycles, alternated"
+
+- OUTSIDE SUBTYPE RULE: every outside entity MUST have a subtype. Ask first:
+  "Is there a specific, documented, quantified malfunction?"
+
+  device_failure: ONE device is clearly wrong in a concrete, measurable way.
+    "Oura starts recording sleep at midnight when I fell asleep at 10:30" → device_failure ✅
+    "Polar strap jumping all over the place, no heart rate reading at all" → device_failure ✅
+    The malfunction is specific and quantified — not a matter of interpretation.
+
+  source_discrepancy: two devices report different values but neither is clearly wrong.
+    "Eight Sleep and Oura showing different deep sleep since PONS" → source_discrepancy ✅
+    "WHOOP shows different HRV than Oura" → source_discrepancy ✅
+    "Eight Sleep more accurate than Oura in my experience" → source_discrepancy ✅
+    These are reliability concerns or disagreements, not confirmed failures.
+    When in doubt → source_discrepancy, not device_failure.
+
+  procurement: supply, logistics, ordering, device arrivals.
+    "couldn't get my supplements", "lactic device delivered, needs calibration" → procurement ✅
+
+  operational: notes addressed to the team, admin, scheduling, instructions.
+    "we should figure out a system for this", "teach me how to calibrate it" → operational ✅
+
+  general: device opinions or complaints with no specific documented impact.
+    "WHOOP sucks", "I don't trust Oura anymore" → general ✅
 
 - OUTSIDE MERGE RULE: multiple outside mentions about the same device or topic → ONE entity.
   Use the most informative raw_text as the primary description.
@@ -601,16 +674,23 @@ def structure_mentions(mentions: list, normalized_text: str) -> list:
     if not mentions:
         return []
 
-    # Deterministik: meal mention'larında reasoning'de "yesterday" geçiyorsa
-    # _event_date hint'i ekle — LLM bunu event_date field'ına koyacak
+    # Deterministic event_date hint injection — all event types, not just meal.
+    # Priority: temporal_evidence="explicit_past" + event_date_label (set by mention.py)
+    # Fallback: "yesterday" string in reasoning or context
+    EVENT_DATE_TYPES_HINT = {"meal", "intake", "symptom", "activity", "machine"}
     for m in mentions:
-        if m.get("candidate_type") == "meal":
-            reasoning = m.get("reasoning", "").lower()
-            context = m.get("context", "").lower()
-            if "yesterday" in reasoning or "yesterday" in context:
-                m["_event_date_hint"] = "yesterday"
-            elif "this morning" in reasoning or "today" in reasoning:
-                m["_event_date_hint"] = None
+        ctype = m.get("candidate_type")
+        if ctype not in EVENT_DATE_TYPES_HINT:
+            continue
+        if m.get("temporal_evidence") == "explicit_past":
+            edl = m.get("event_date_label")
+            if edl:
+                m["_event_date_hint"] = edl
+                continue
+        reasoning = m.get("reasoning", "").lower()
+        context_text = m.get("context", "").lower()
+        if "yesterday" in reasoning or "yesterday" in context_text:
+            m["_event_date_hint"] = "yesterday"
 
     mentions_json = json.dumps(mentions, indent=2)
 
@@ -656,6 +736,78 @@ def structure_mentions(mentions: list, normalized_text: str) -> list:
             print(f"⚠️ structure_mentions: Pydantic rejected entity {raw_entity.get('type', '?')} / {raw_entity.get('label', raw_entity.get('linked_to', '?'))}: {e}")
             # Drop the malformed entity — do not pass raw dicts through
 
+    # ── Intervention guard ────────────────────────────────────────────────
+    # Every intervention mention MUST produce an intervention entity.
+    # Uses token-based matching for robustness across label variations.
+
+    def _guard_labels_match(raw_mention: str, entity_label: str) -> bool:
+        STOP = {"course", "protocol", "treatment", "therapy", "program",
+                "supplement", "dose", "medication", "drug", "pill", "tablet"}
+        ta = {t for t in raw_mention.lower().split() if t not in STOP and len(t) > 2}
+        tb = {t for t in entity_label.lower().split() if t not in STOP and len(t) > 2}
+        if ta & tb:
+            return True
+        if raw_mention.lower() in entity_label.lower() or entity_label.lower() in raw_mention.lower():
+            return True
+        return False
+
+    for mention in mentions:
+        if mention.get("candidate_type") != "intervention":
+            continue
+
+        raw = mention.get("raw_mention", "")
+        raw_lower = raw.lower()
+
+        # 1. Check if a correct intervention entity already exists for this mention
+        intervention_exists = any(
+            e.get("type") == "intervention" and _guard_labels_match(raw_lower, e.get("label", ""))
+            for e in entities
+        )
+
+        # 2. Remove spurious non-intervention entities that share this label
+        #    intake IS allowed to coexist — it captures the specific dose event.
+        ALLOWED_ALONGSIDE = {"intake"}
+        spurious = [
+            e for e in entities
+            if e.get("type") not in {"intervention"} | ALLOWED_ALONGSIDE
+            and _guard_labels_match(raw_lower, e.get("label", e.get("linked_to", "")))
+        ]
+        for s in spurious:
+            print(f"⚙️  structure guard: removing spurious {s.get('type')}|"
+                  f"{s.get('label', s.get('linked_to', '?'))} — intervention mention '{raw}' exists")
+        if spurious:
+            entities = [e for e in entities if e not in spurious]
+
+        if intervention_exists:
+            continue
+
+        # 3. No intervention entity found — find the wrong entity the LLM produced
+        wrong_entity = next(
+            (e for e in entities
+             if e.get("type") != "intervention"
+             and _guard_labels_match(raw_lower, e.get("label", e.get("linked_to", "")))),
+            None
+        )
+
+        if wrong_entity:
+            print(f"⚙️  structure guard: '{raw}' mention was intervention "
+                  f"but LLM produced {wrong_entity.get('type')} — fixing")
+            entities = [e for e in entities if e is not wrong_entity]
+        else:
+            print(f"⚙️  structure guard: '{raw}' mention produced no entity at all — injecting intervention")
+
+        # Inject minimal intervention entity — enricher + schema_enforcer will fill the rest
+        entities.append({
+            "type": "intervention",
+            "label": raw,
+            "status": "active",
+            "start_date": None,
+            "end_date": None,
+            "duration_days": None,
+            "day_of_protocol": None,
+            "notes": mention.get("context") or None,
+        })
+
     # Attach raw_mention from mentions list to each entity
     entities = _attach_raw_mentions(entities, mentions)
 
@@ -677,24 +829,38 @@ def structure_mentions(mentions: list, normalized_text: str) -> list:
                 entity["status"] = "did_not_use"
                 print(f"⚙️  negation applied: machine '{label}' → did_not_use")
 
-    # Deterministik event_date hint uygula
-    # Mention'da _event_date_hint varsa entity'ye uygula
-    mention_hint_map = {}
+    # Deterministic event_date hint application — all event types, token-based matching.
+    EVENT_DATE_TYPES_APPLY = {"meal", "intake", "symptom", "activity", "machine"}
+
+    def _event_date_labels_match(raw: str, entity_label: str) -> bool:
+        STOP = {"course", "protocol", "supplement", "dose", "medication",
+                "breakfast", "lunch", "dinner", "meal"}
+        ta = {t for t in raw.split() if t not in STOP and len(t) > 2}
+        tb = {t for t in entity_label.split() if t not in STOP and len(t) > 2}
+        if ta & tb:
+            return True
+        return raw in entity_label or entity_label in raw
+
+    mention_hint_map: dict = {}
     for m in mentions:
         hint = m.get("_event_date_hint")
-        if hint is not None:
-            raw = m.get("raw_mention", "").lower()
-            mention_hint_map[raw] = hint
+        if hint:
+            raw_key = m.get("raw_mention", "").lower()
+            mention_hint_map[raw_key] = hint
 
-    for entity in entities:
-        if entity.get("type") == "meal":
+    if mention_hint_map:
+        for entity in entities:
+            etype = entity.get("type")
+            if etype not in EVENT_DATE_TYPES_APPLY:
+                continue
+            if entity.get("event_date"):
+                continue
             label = entity.get("label", "").lower()
-            # Check if this meal's label matches a hinted mention
-            if label in mention_hint_map:
-                hint = mention_hint_map[label]
-                if hint and not entity.get("event_date"):
+            for raw_key, hint in mention_hint_map.items():
+                if _event_date_labels_match(raw_key, label):
                     entity["event_date"] = hint
-                    print(f"⚙️  event_date hint applied: meal '{label}' → event_date: '{hint}'")
+                    print(f"⚙️  event_date hint applied: {etype} '{label}' → event_date: '{hint}'")
+                    break
 
     return _resolve_time_references(entities)
 

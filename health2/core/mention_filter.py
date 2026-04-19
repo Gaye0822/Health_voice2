@@ -71,7 +71,7 @@ def filter_mentions(mentions: list, transcript: str) -> tuple:
     Rules:
     - future_plan → always drop
     - consultation_relay → always drop
-    - active_regimen → keep only if same-session confirmation found
+    - active_regimen → keep only if same-session confirmation found 
     - unclear → keep only if same-session confirmation found
     - explicit_today → always keep
     """
@@ -118,7 +118,10 @@ def filter_mentions(mentions: list, transcript: str) -> tuple:
         # Exception: outcome mentions don't need same-session confirmation —
         # they are observed directional changes, not actions that need to be confirmed today
         if te in NEEDS_CONFIRMATION:
-            if candidate_type == "outcome":
+            if candidate_type in ("outcome", "intervention"):
+                # outcome and intervention don't need same-session confirmation:
+                # outcomes are observed patterns over time,
+                # interventions are multi-day protocols by definition
                 kept.append(mention)
                 continue
             if has_same_session_signal(mention, transcript):

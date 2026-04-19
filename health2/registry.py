@@ -449,23 +449,32 @@ with tab4:
                         st.caption(f"💭 Reasoning: {item['reasoning']}")
 
                     # Show relevant transcript snippet
-                    transcript = item.get("transcript_text", "")
-                    if transcript:
-                        # Try label first, then raw_mention from flag_reason
-                        search_term = label
-                        flag = item.get("flag_reason", "") or ""
-                        if "inferred from" in flag:
-                            # Extract raw_mention from flag: "Label 'X' inferred from 'Y'"
-                            import re
-                            m = re.search(r"inferred from '([^']+)'", flag)
-                            if m:
-                                search_term = m.group(1)
+                    # Use raw (Whisper) transcript to find inferred terms (e.g. "Korea" for nocturia)
+                    import re as _re
+                    flag_str = item.get("flag_reason", "") or ""
+                    search_term = label
+                    print(f"⚙️  registry snippet: flag_str={flag_str!r}")
+                    if "inferred from" in flag_str:
+                        m2 = _re.search(r"inferred from '([^']+)'", flag_str)
+                        if m2:
+                            search_term = m2.group(1)
+                    print(f"⚙️  registry snippet: search_term={search_term!r}")
+                    raw_t = item.get("raw_transcript_text", "") or ""
+                    norm_t = item.get("transcript_text", "") or ""
+                    print(f"⚙️  registry snippet: raw_t[:80]={raw_t[:80]!r} norm_t[:80]={norm_t[:80]!r}")
+
+                    # Try raw transcript first (has original Whisper words like "Korea")
+                    for transcript_key in ("raw_transcript_text", "transcript_text"):
+                        transcript = item.get(transcript_key, "") or ""
+                        if not transcript:
+                            continue
                         idx = transcript.lower().find(search_term.lower())
-                        if idx < 0:
+                        if idx < 0 and search_term != label:
                             idx = transcript.lower().find(label.lower())
                         if idx >= 0:
-                            snippet = transcript[max(0, idx-80):idx+80]
+                            snippet = transcript[max(0, idx-80):idx+80].strip()
                             st.write(f"**Transcript:** ...{snippet}...")
+                            break
 
                     st.json(entity)
 
