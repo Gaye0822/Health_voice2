@@ -49,7 +49,6 @@ For each mention, work through these questions before writing the entity:
    If a mention came in as "intake" → it must leave as "intake".
    If a mention came in as "symptom" → it must leave as "symptom".
    If a mention came in as "outcome" → it must leave as "outcome".
-   If a mention came in as "intervention" -> it must leave as "intervention".
 
    The relationship between entities (e.g. paracetamol reducing nocturia) may already
    be captured as a separate outcome or theory entity in the same mention list.
@@ -58,33 +57,8 @@ For each mention, work through these questions before writing the entity:
    The ONLY exception: if the candidate_type is "other" → use your judgment to
    determine the best fitting schema, or omit if not structurable.
 
-   ── INTERVENTION CANDIDATE TYPE — MANDATORY SCHEMA BRANCH ──
-   Before processing any mention, check: is candidate_type = "intervention"?
-   If NO - continue.
-   If YES — stop.DO NOT CHANGE THE ENTITI TYPE . Do not read further into this section. Apply these rules immediately:
-
-
-   STEP 1: Write type: "intervention". No other type is permitted.
-   STEP 2: The substance name may sound like something you would put in an intake entity
-           (e.g. "doxycycline", "BPC-157", "PHGG"). Ignore that. The schema branch
-           is intervention. Fill intervention fields only:
-           label, start_date, end_date, status, duration_days, day_of_protocol, notes.
-   STEP 3: Do NOT write action, dose, unit, category, or any intake field.
-           These fields do not exist on an intervention entity.
-   STEP 4: status defaults to "active" unless the transcript says the course is finished.
-   STEP 5: start_date — write the user's exact words. Never convert to a date.
-           "two days ago" → start_date: "two days ago"
-           "last night" → start_date: "last night"
-           "last Monday" → start_date: "last Monday"
-   STEP 6: duration_days — integer only if explicitly stated. Otherwise null.
-           "10 days" → duration_days: 10. "a month" → null.
-   STEP 7: day_of_protocol — always null. Schema_enforcer calculates this.
-
-   Correct output for an intervention mention:
-     { "type": "intervention", "label": "doxycycline course", "status": "active",
-       "start_date": "last night", "duration_days": 10, "day_of_protocol": null }
-   Wrong output — NEVER produce this for an intervention candidate_type:
-     { "type": "intake", "label": "doxycycline", "action": "took", "category": "prescription" }
+   NOTE: intervention candidate_type will never appear in this list.
+   Interventions are processed by a separate pipeline before this stage.
 
 2. WHAT ACTUALLY HAPPENED?
    Use the temporal_evidence field:
@@ -93,9 +67,6 @@ For each mention, work through these questions before writing the entity:
      same-session confirmation (specific time, "today", "this morning", "just")
      Provider advice to continue is NOT same-session confirmation.
      If no confirmation → omit
-     EXCEPTION: intervention entities are always structured regardless of
-     active_regimen — a multi-day protocol does not need same-session confirmation.
-     See the INTERVENTION CANDIDATE TYPE block in step 1 for full schema rules.
    - future_plan → omit entirely
    - consultation_relay → omit entirely, EXCEPT factual test results and
      factual measurements which can be extracted normally
@@ -175,13 +146,6 @@ For each mention, work through these questions before writing the entity:
      "WHOOP sucks" → general
 
 
-
-   These are interventions:
-   - "I've been on antibiotics for 5 days" → intervention
-   - "Started a peptide course last month" → intervention
-   - "Doing a 30-day FMT protocol" → intervention (multi-session explicitly stated)
-
-  
 
    For symptoms specifically: ask whether this is a body state the user is currently
    experiencing, or whether it names a pathogen, virus, or infection source.
@@ -735,78 +699,6 @@ def structure_mentions(mentions: list, normalized_text: str) -> list:
         except Exception as e:
             print(f"⚠️ structure_mentions: Pydantic rejected entity {raw_entity.get('type', '?')} / {raw_entity.get('label', raw_entity.get('linked_to', '?'))}: {e}")
             # Drop the malformed entity — do not pass raw dicts through
-
-    # ── Intervention guard ────────────────────────────────────────────────
-    # Every intervention mention MUST produce an intervention entity.
-    # Uses token-based matching for robustness across label variations.
-
-    def _guard_labels_match(raw_mention: str, entity_label: str) -> bool:
-        STOP = {"course", "protocol", "treatment", "therapy", "program",
-                "supplement", "dose", "medication", "drug", "pill", "tablet"}
-        ta = {t for t in raw_mention.lower().split() if t not in STOP and len(t) > 2}
-        tb = {t for t in entity_label.lower().split() if t not in STOP and len(t) > 2}
-        if ta & tb:
-            return True
-        if raw_mention.lower() in entity_label.lower() or entity_label.lower() in raw_mention.lower():
-            return True
-        return False
-
-    for mention in mentions:
-        if mention.get("candidate_type") != "intervention":
-            continue
-
-        raw = mention.get("raw_mention", "")
-        raw_lower = raw.lower()
-
-        # 1. Check if a correct intervention entity already exists for this mention
-        intervention_exists = any(
-            e.get("type") == "intervention" and _guard_labels_match(raw_lower, e.get("label", ""))
-            for e in entities
-        )
-
-        # 2. Remove spurious non-intervention entities that share this label
-        #    intake IS allowed to coexist — it captures the specific dose event.
-        ALLOWED_ALONGSIDE = {"intake"}
-        spurious = [
-            e for e in entities
-            if e.get("type") not in {"intervention"} | ALLOWED_ALONGSIDE
-            and _guard_labels_match(raw_lower, e.get("label", e.get("linked_to", "")))
-        ]
-        for s in spurious:
-            print(f"⚙️  structure guard: removing spurious {s.get('type')}|"
-                  f"{s.get('label', s.get('linked_to', '?'))} — intervention mention '{raw}' exists")
-        if spurious:
-            entities = [e for e in entities if e not in spurious]
-
-        if intervention_exists:
-            continue
-
-        # 3. No intervention entity found — find the wrong entity the LLM produced
-        wrong_entity = next(
-            (e for e in entities
-             if e.get("type") != "intervention"
-             and _guard_labels_match(raw_lower, e.get("label", e.get("linked_to", "")))),
-            None
-        )
-
-        if wrong_entity:
-            print(f"⚙️  structure guard: '{raw}' mention was intervention "
-                  f"but LLM produced {wrong_entity.get('type')} — fixing")
-            entities = [e for e in entities if e is not wrong_entity]
-        else:
-            print(f"⚙️  structure guard: '{raw}' mention produced no entity at all — injecting intervention")
-
-        # Inject minimal intervention entity — enricher + schema_enforcer will fill the rest
-        entities.append({
-            "type": "intervention",
-            "label": raw,
-            "status": "active",
-            "start_date": None,
-            "end_date": None,
-            "duration_days": None,
-            "day_of_protocol": None,
-            "notes": mention.get("context") or None,
-        })
 
     # Attach raw_mention from mentions list to each entity
     entities = _attach_raw_mentions(entities, mentions)

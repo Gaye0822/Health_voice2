@@ -117,11 +117,11 @@ def filter_mentions(mentions: list, transcript: str) -> tuple:
         # Needs same-session confirmation
         # Exception: outcome mentions don't need same-session confirmation —
         # they are observed directional changes, not actions that need to be confirmed today
+        # Note: intervention candidate_type never reaches here — handled by separate pipeline
         if te in NEEDS_CONFIRMATION:
-            if candidate_type in ("outcome", "intervention"):
-                # outcome and intervention don't need same-session confirmation:
-                # outcomes are observed patterns over time,
-                # interventions are multi-day protocols by definition
+            if candidate_type == "outcome":
+                # outcomes don't need same-session confirmation:
+                # they are observed patterns over time
                 kept.append(mention)
                 continue
             if has_same_session_signal(mention, transcript):

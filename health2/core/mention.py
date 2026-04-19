@@ -304,79 +304,44 @@ measurement
   the pipeline already has access to.
 
 intervention
-  A multi-session treatment protocol with a defined start and an expected end.
-  An intervention spans days or weeks — it is not a single event.
+  Signal only — duration, date, and protocol validity are evaluated by the intervention
+  pipeline, not here. Your only job is to detect whether the user is referring to a
+  multi-session treatment, course, or protocol for their own body.
 
-  Ask these two questions:
-  1. Does this have a beginning AND an expected end that is explicitly stated
-     as a specific duration
-     Uncertain or speculative durations DO NOT qualify:
-     "maybe a few weeks", "not sure how long", "over a month", "indefinitely" → NOT sufficient.
-     Can you convert the stated duration to an exact number of days?
-     "10 days" → 10 ✅ → qualifies
-     "two weeks" → 14 ✅ → qualifies
-     "a month" → 30 ✅ → qualifies
-     "over a month" → 30+? ❌ → NOT convertible → omit intervention, intake only
-     "a few weeks" → 14? 21? ❌ → NOT convertible → intake only
-     "up to 4.5mg" → not a duration at all ❌ → intake only
-     "he said work up to X over a month" → NOT convertible ❌ → intake only
-     If you cannot write a single exact integer → do not extract as intervention.
-     
-    
-  2. Is this a protocol or course — not just a one-time action?
-  If both yes → intervention.
-  If either no → intake (single dose or substance) or activity (single session).
+  Assign candidate_type: intervention if:
+  - The user mentions a course, protocol, or treatment spanning multiple days/sessions
+  - The user has already started it and is actively undergoing it
+  - It applies to the user's own body
 
-  These ARE interventions:
+  THE KEY SIGNAL IS WHETHER THE USER HAS STARTED — not who initiated it.
+  A provider may have recommended the protocol, but if the user has begun taking it,
+  it is an intervention signal. "Majdi wanted me on X for two weeks, I started three days ago"
+  → the user started → intervention ✅
+  "Majdi wants me to start X next week" → not yet started → future_plan ❌
+
+  temporal_evidence rules apply normally:
+  - future_plan → if not yet started
+  - active_regimen → if ongoing but no today-specific language
+  - explicit_today / explicit_past → if a specific dose or session is mentioned today or recently
+
+  These ARE intervention signals:
   - "I've been on antibiotics for 5 days" → intervention
   - "Started a peptide course" → intervention
   - "Doing a 30-day elimination diet" → intervention
-  - "FMT protocol" → intervention (only if multi-session series is implied)
-  - "I'm just gonna do 10 days at 100 mg until someone tells me differently" → intervention
-    The "gonna" here is a protocol decision, not a future plan — the user has already
-    started (first dose taken) and is declaring the full course. Extract as intervention.
+  - "FMT protocol, three sessions so far" → intervention
+  - "I'm on day 4 of rifaximin" → intervention
+  - "Majdi wanted me on metformin for two weeks, I started three days ago" → intervention
+  - "Doctor put me on a 10-day course, took my second dose this morning" → intervention
 
-  PROTOCOL DECLARATION RULE:
-  When the user states a dosing schedule AND has already begun taking it, this is an
-  intervention even if phrased with "gonna", "going to", or "I'll just do X days".
-  The key signal: a duration + a dose + evidence that it has already started.
-  "I'm just gonna do 10 days at 100 mg" after mentioning "last night I took my second dose"
-  → already started + declared duration → intervention ✅
-
-  INTERVENTION + INTAKE COEXISTENCE RULE:
-  When a substance appears both as a protocol declaration AND as a specific dose event,
-  extract BOTH as separate mentions — they are not duplicates, they describe different things.
-  - intervention mention → captures the protocol: duration, total dose, course intent
-  - intake mention → captures the specific dose event: when it was taken, how much, which dose
-  These two mentions must always coexist when both signals are present. One does not
-  replace the other. The intake record is what enables compliance tracking day by day.
-  Example:
-  "last night around 9 PM I took my second 100 mg dose... I'm just gonna do 10 days at 100 mg"
-  → intervention: doxycycline course (10 days, 100 mg) ✅
-  → intake: doxycycline, took, 100 mg, 9 PM, yesterday (second dose) ✅
-  Both must be extracted. Never collapse them into one.
-
-  DURATION RULE:
-  duration_days — carry the user's exact words only. Never convert or approximate.
-  "10 days" → carry as "10 days" ✅
-  "over a month", "a few weeks", "maybe 30 days", "not sure how long" → these are
-  vague or open-ended — do NOT convert to a number. Carry exact words or omit.
-  Structure.py handles the integer conversion; mention.py must not pre-interpret.
-
-  These are NOT interventions:
+  These are NOT intervention signals:
   - "Had the FMT treatment yesterday" → intake (single session, no protocol implied)
   - "Took paracetamol" → intake
   - "Did Novothor" → machine (single session)
-  - "Got an IV" → intake (single dose)
   - "I'm going to start antibiotics tomorrow" → future_plan (not yet started)
-  - "I might do this for a few weeks" → intake (uncertain duration, no declared endpoint)
-  - "Not sure how long I'll keep taking this" → intake (open-ended, no committed protocol)
-  - "Maybe over a month" → intake (speculative duration, not a declared course)
-  - "he said take up to 4.5 over a month" → intake only (provider-declared titration schedule,
-    duration is the provider's instruction not a declared protocol endpoint — no intervention)
+  - "Majdi wants me to try X" → future_plan or omit (no evidence user has started)
 
-  When in doubt: if the user describes a single completed event → intake or activity.
-  Intervention requires explicit multi-session or protocol language.
+  Do NOT apply duration checks, coexistence rules, or any other protocol validation here.
+  Extract the signal and move on — the intervention pipeline handles everything else.
 
 outcome
   An observed directional change in a tracked health variable over time,
@@ -669,16 +634,6 @@ STEP 3 — ELIMINATE theory:
 - Is this about the user's own body/health? → If no: outside
 
 If theory survives step 3 → extract as theory.
-
-STEP 3.5 — ELIMINATE intervention:
-If the candidate type seems like intervention, answer both:
-- Can you convert the duration to a single exact integer of days?
-  "over a month" → ❌ NOT convertible. "over" means more than — no exact number exists.
-  "a month" → 30 ✅ (exact)
-  "over a month" ≠ "a month" — "over" makes it open-ended, do not round down.
-- Is this the USER's own time commitment — not a provider's titration instruction?
-  "he said work up to 4.5 over a month" → provider instruction → ❌ → intake only, stop.
-If either fails → omit . NOT intervention Do not proceed to STEP 4. Stop here.
 
 STEP 4 — ASSIGN final type:
 State: "Final type: [type] because [one sentence reason]"

@@ -8,8 +8,9 @@ from core.normalize import normalize_transcript
 from core.mention import extract_mentions
 from core.structure import structure_mentions
 from core.validate import validate_entities
-from core.intervention_enricher import extract_intervention_signals
 from core.schema_enforcer import enforce_schema
+from core.intervention_pipeline import run_intervention_pipeline
+from core.intervention_merger import merge_intervention_entities
 from core.db import (
     save_transcript,
     save_entities,
@@ -464,14 +465,23 @@ elif st.session_state.step == "review_mentions":
                     )
                     st.toast(f"✅ Saved: {raw} → {new_type}")
 
+            # ── Split mentions — intervention goes to its own pipeline ──────
+            intervention_mentions = [
+                m for m in updated_mentions if m.get("candidate_type") == "intervention"
+            ]
+            normal_mentions = [
+                m for m in updated_mentions if m.get("candidate_type") != "intervention"
+            ]
+
+            # ── Normal pipeline ───────────────────────────────────────────
             with st.spinner("Structuring entities (Stage 2)..."):
-                entities = structure_mentions(updated_mentions, st.session_state.normalized)
+                normal_entities = structure_mentions(normal_mentions, st.session_state.normalized)
             with st.spinner("Applying schema rules (Stage 2b)..."):
-                entities, enforcer_violations = enforce_schema(entities)
+                normal_entities, enforcer_violations = enforce_schema(normal_entities)
                 if enforcer_violations:
                     print(f"⚙️  schema_enforcer: {len(enforcer_violations)} violation(s)")
 
-            # Apply event_date BEFORE enricher and validate so all downstream stages
+            # Apply event_date BEFORE merge so all downstream stages
             # see correct event_date. structure.py hint mechanism covers most cases;
             # this is the backstop for any entity still missing event_date.
             def _ed_labels_match(raw: str, entity_label: str) -> bool:
@@ -484,14 +494,14 @@ elif st.session_state.step == "review_mentions":
                 return raw in entity_label or entity_label in raw
 
             EVENT_DATE_TYPES = {"meal", "symptom", "intake", "activity", "machine"}
-            for entity in entities:
+            for entity in normal_entities:
                 etype = entity.get("type")
                 if etype not in EVENT_DATE_TYPES:
                     continue
                 if entity.get("event_date"):
                     continue  # structure.py already filled — do not overwrite
                 label = entity.get("label", "").lower()
-                for m in updated_mentions:
+                for m in normal_mentions:
                     if m.get("candidate_type") != etype:
                         continue
                     m_raw = m.get("raw_mention", "").lower()
@@ -503,11 +513,16 @@ elif st.session_state.step == "review_mentions":
                                 print(f"⚙️  app.py event_date ({etype}): '{entity.get('label')}' → '{edl}'")
                         break
 
-            with st.spinner("Enriching interventions (Stage 2c)..."):
-                intervention_signals = extract_intervention_signals(entities, st.session_state.normalized)
-                if intervention_signals:
-                    from core.schema_enforcer import apply_enrichment_only
-                    entities = apply_enrichment_only(entities, intervention_signals)
+            # ── Intervention pipeline ─────────────────────────────────────
+            with st.spinner("Processing interventions (Stage 2c)..."):
+                intervention_entities = run_intervention_pipeline(
+                    intervention_mentions, st.session_state.normalized
+                )
+
+            # ── Merge ─────────────────────────────────────────────────────
+            with st.spinner("Merging entities (Stage 2d)..."):
+                entities = merge_intervention_entities(intervention_entities, normal_entities)
+
             with st.spinner("Validating entities (Stage 3)..."):
                 entities, validation_changes = validate_entities(entities, st.session_state.normalized)
 

@@ -374,13 +374,15 @@ If no changes needed, return original entities with empty changes list."""
             original_type = input_types.get(label)
             if original_type and current_type != original_type:
                 # Exception 1: action field confirms intake
-                if e.get("action") in ("took", "did_not_take"):
+                # BUT never allow intervention → intake conversion via this path:
+                # interventions are produced by a separate pipeline and must not be
+                # downgraded to intake by the validator under any circumstance.
+                if e.get("action") in ("took", "did_not_take") and original_type != "intervention":
                     print(f"⚙️  Guard allowing intake correction for '{label}': action field confirms intake")
                     all_changes.append(f"Structure type error corrected: '{label}' was {original_type}, action field confirms intake")
-                # Exception 3: intervention correction — structure LLM wrote intake but mention was intervention
-                
                 # Exception 2: KB explicitly instructed this type correction
-                elif label in kb_corrected_labels:
+                # Again: never downgrade intervention via KB correction.
+                elif label in kb_corrected_labels and original_type != "intervention":
                     print(f"⚙️  Guard allowing KB type correction for '{label}': {original_type} → {e['type']}")
                     all_changes.append(f"KB type correction applied: '{label}' {original_type} → {e['type']}")
                 else:
