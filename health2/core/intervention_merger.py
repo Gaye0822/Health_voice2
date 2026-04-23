@@ -45,6 +45,7 @@ _RELATIVE_DATE_OFFSETS = {
     "yesterday afternoon": 1,
     "yesterday evening": 1,
     "yesterday night": 1,
+    "last night":1,
     "the night before last": 2,
     "two days ago": 2,
     "2 days ago": 2,
@@ -168,39 +169,58 @@ def merge_intervention_entities(
                 f"{len(matched_intakes)} matching intake(s)"
             )
 
-        for intake in matched_intakes:
-            intake["is_intervention_dose"] = True
+        # Resolve intervention end_date for range check
+        end_date_raw = intervention.get("end_date")
+        end_date: "date | None" = _resolve_date(end_date_raw, today_date) if end_date_raw else None
+        # end_date may already be ISO string from pipeline
+        if end_date is None and end_date_raw:
+            try:
+                from datetime import date as date_type
+                end_date = date_type.fromisoformat(end_date_raw)
+            except (ValueError, TypeError):
+                pass
 
+        for intake in matched_intakes:
             if start_date is None:
+                intake["is_intervention_dose"] = True
                 print(
                     f"⚙️  intervention_merger: intake '{intake.get('label')}' → "
                     f"is_intervention_dose=True (day_of_protocol skipped — start_date unknown)"
                 )
                 continue
 
-            # Resolve intake's event_date
+            # Resolve intake event_date
             intake_event_raw = intake.get("event_date") or ""
             intake_date = _resolve_date(intake_event_raw, today_date)
-
             if intake_date is None:
-                # No event_date → assume today
                 intake_date = today_date
 
             day = (intake_date - start_date).days + 1
 
+            # Range check — if intake date is outside protocol window → not an intervention dose
+            if end_date is not None and intake_date > end_date:
+                intake["is_intervention_dose"] = False
+                print(
+                    f"⚙️  intervention_merger: intake '{intake.get('label')}' @ {intake_date} "
+                    f"is AFTER end_date {end_date} → is_intervention_dose=False"
+                )
+                continue
+
             if day < 1:
+                intake["is_intervention_dose"] = False
                 print(
-                    f"⚠️  intervention_merger: intake '{intake.get('label')}' — "
-                    f"computed day_of_protocol={day} invalid "
-                    f"(event_date={intake_event_raw!r}, start_date={start_date_raw!r}), skipping"
+                    f"⚙️  intervention_merger: intake '{intake.get('label')}' — "
+                    f"day_of_protocol={day} invalid → is_intervention_dose=False"
                 )
-            else:
-                intake["day_of_protocol"] = day
-                suffix = f" (event_date: {intake_event_raw})" if intake_event_raw else " (today)"
-                print(
-                    f"⚙️  intervention_merger: intake '{intake.get('label')}' → "
-                    f"is_intervention_dose=True, day_of_protocol={day}{suffix}"
-                )
+                continue
+
+            intake["is_intervention_dose"] = True
+            intake["day_of_protocol"] = day
+            suffix = f" (event_date: {intake_event_raw})" if intake_event_raw else " (today)"
+            print(
+                f"⚙️  intervention_merger: intake '{intake.get('label')}' → "
+                f"is_intervention_dose=True, day_of_protocol={day}{suffix}"
+            )
 
     # Remove internal _substance_label field before returning
     for e in interventions:

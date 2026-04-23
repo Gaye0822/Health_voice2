@@ -472,7 +472,7 @@ elif st.session_state.step == "review_mentions":
             normal_mentions = [
                 m for m in updated_mentions if m.get("candidate_type") != "intervention"
             ]
-
+            
             # ── Normal pipeline ───────────────────────────────────────────
             with st.spinner("Structuring entities (Stage 2)..."):
                 normal_entities = structure_mentions(normal_mentions, st.session_state.normalized)
@@ -499,7 +499,7 @@ elif st.session_state.step == "review_mentions":
                 if etype not in EVENT_DATE_TYPES:
                     continue
                 if entity.get("event_date"):
-                    continue  # structure.py already filled — do not overwrite
+                    continue
                 label = entity.get("label", "").lower()
                 for m in normal_mentions:
                     if m.get("candidate_type") != etype:
@@ -512,6 +512,68 @@ elif st.session_state.step == "review_mentions":
                                 entity["event_date"] = edl
                                 print(f"⚙️  app.py event_date ({etype}): '{entity.get('label')}' → '{edl}'")
                         break
+
+            # time field'ında tarihsel ifade varsa event_date'e taşı
+            # time field'ında tarihsel ifade varsa event_date'e taşı,
+            # bugünü gösteren ifade varsa event_date'i temizle
+            _DATE_EXPRESSIONS = {
+                "last night", "yesterday", "yesterday morning", "yesterday afternoon",
+                "yesterday evening", "yesterday night", "the night before last",
+                "two days ago", "three days ago", "last week", "last monday",
+                "last tuesday", "last wednesday", "last thursday", "last friday",
+                "last saturday", "last sunday"
+            }
+            _TODAY_TIME_SIGNALS = {
+                "this morning", "this afternoon", "this evening", "tonight",
+                "today", "just now", "right now"
+            }
+            for entity in normal_entities:
+                if entity.get("type") not in EVENT_DATE_TYPES:
+                    continue
+                time_val = (entity.get("time") or "").strip().lower()
+                if time_val in _DATE_EXPRESSIONS:
+                    if not entity.get("event_date"):
+                        entity["event_date"] = time_val
+                        print(f"⚙️  app.py time→event_date: '{entity.get('label')}' '{time_val}' → event_date")
+                    entity["time"] = None
+                elif time_val in _TODAY_TIME_SIGNALS:
+                    if entity.get("event_date"):
+                        print(f"⚙️  app.py today-time override: '{entity.get('label')}' time='{time_val}' → clearing event_date")
+                        entity["event_date"] = None
+                    entity["time"] = None
+            # ── Intake shadow mentions for intervention substances ───────────
+            # Each intervention mention also needs an intake entity in the normal
+            # pipeline so that intervention_merger can find and annotate it.
+            # We create a shallow copy of the mention with candidate_type: "intake".
+            # The original intervention mention still goes to intervention_pipeline
+            # unchanged — this copy is only for structure.py / normal pipeline.
+            #
+            # temporal_evidence is preserved as-is so mention_filter (already run
+            # above) and structure.py can apply their normal logic.
+            # _intervention_shadow=True marks these for logging/debugging.
+            for m in intervention_mentions:
+                int_raw = m.get("raw_mention", "").lower()
+                # Aynı substance için zaten intake mention varsa shadow ekleme
+                already_has_intake = any(
+                    n.get("candidate_type") == "intake" and
+                    _ed_labels_match(n.get("raw_mention", "").lower(), int_raw)
+                    for n in normal_mentions
+                )
+                if already_has_intake:
+                    print(
+                        f"⚙️  app.py [intervention shadow]: '{m.get('raw_mention', '')}' "
+                        f"→ intake mention already exists, skipping shadow"
+                    )
+                    continue
+                shadow = dict(m)
+                shadow["candidate_type"] = "intake"
+                shadow["_intervention_shadow"] = True
+                normal_mentions.append(shadow)
+                print(
+                    f"⚙️  app.py [intervention shadow]: '{m.get('raw_mention', '')}' "
+                    f"→ intake copy added to normal pipeline"
+                )
+
 
             # ── Intervention pipeline ─────────────────────────────────────
             with st.spinner("Processing interventions (Stage 2c)..."):

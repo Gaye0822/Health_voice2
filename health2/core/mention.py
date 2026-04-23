@@ -337,8 +337,30 @@ intervention
   - "Had the FMT treatment yesterday" → intake (single session, no protocol implied)
   - "Took paracetamol" → intake
   - "Did Novothor" → machine (single session)
-  - "I'm going to start antibiotics tomorrow" → future_plan (not yet started)
-  - "Majdi wants me to try X" → future_plan or omit (no evidence user has started)
+
+  DUAL EXTRACTION RULE — intervention + intake birlikte:
+  If the user mentions a protocol AND reports taking a specific dose today or recently,
+  extract BOTH:
+  - intervention mention for the protocol signal
+  - intake mention for the dose event
+
+  The intervention captures the protocol context.
+  The intake captures the actual dosing event.
+
+  Examples:
+  - "SS-31, that's a 20-injection course, did number seven this morning" →
+    intervention (SS-31, protocol signal) + intake (SS-31, took, this morning) ✅
+  - "I'm on day 4 of rifaximin, took it an hour ago" →
+    intervention (rifaximin) + intake (rifaximin, took) ✅
+  - "I've been on antibiotics for 5 days" →
+    intervention only — no specific dose event mentioned today ✅
+  - "Took paracetamol last night" →
+    intake only — no protocol implied ✅
+
+  The test: is there a specific dose event (took it, did it, injected it, this morning/tonight)?
+  If yes AND protocol context exists → extract both.
+  If only protocol context, no dose event → intervention only.
+  If only dose event, no protocol → intake only.
 
   Do NOT apply duration checks, coexistence rules, or any other protocol validation here.
   Extract the signal and move on — the intervention pipeline handles everything else.

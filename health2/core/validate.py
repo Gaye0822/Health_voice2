@@ -9,7 +9,7 @@ load_dotenv()
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 # Protected types — never sent to LLM validator
-PROTECTED_TYPES = {"theory", "outside", "context"}
+PROTECTED_TYPES = {"theory", "outside", "context", "intervention"}
 
 
 def _get_knowledge() -> str:
@@ -329,16 +329,26 @@ If no changes needed, return original entities with empty changes list."""
         if len(validated) > len(to_validate):
             added_count = len(validated) - len(to_validate)
             print(f"⚠️ Validator added {added_count} entity(ies) — stripping extras")
-            # Keep only entities whose labels exist in the input
             input_labels = {
                 e.get("label", e.get("metric", e.get("linked_to", e.get("raw_text", ""))))
                 for e in to_validate
             }
-            validated = [
+            # Validator'ın eklediği entity'leri at
+            validated_filtered = [
                 e for e in validated
                 if e.get("label", e.get("metric", e.get("linked_to", e.get("raw_text", "")))) in input_labels
             ]
-            # If still more, just take first N
+            # Filtreleme sırasında input'taki bir entity silindiyse geri ekle
+            filtered_labels = {
+                e.get("label", e.get("metric", e.get("linked_to", e.get("raw_text", ""))))
+                for e in validated_filtered
+            }
+            for e in to_validate:
+                e_label = e.get("label", e.get("metric", e.get("linked_to", e.get("raw_text", ""))))
+                if e_label not in filtered_labels:
+                    validated_filtered.append(e)
+                    print(f"⚠️  Guard restored missing input entity: '{e_label}'")
+            validated = validated_filtered
             if len(validated) > len(to_validate):
                 validated = validated[:len(to_validate)]
             all_changes.append(f"Validator attempted to add {added_count} entity(ies) — stripped by guard")

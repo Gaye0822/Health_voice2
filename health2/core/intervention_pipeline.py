@@ -104,11 +104,15 @@ For each substance, extract:
   true if: user says "I did a course last month", "back in March I took...",
            "a few weeks ago I finished...", "I had a 10-day course last year"
   false otherwise — default false
-- notes: any protocol deviations, missed doses, skipped days, dose changes, or
-  compliance notes mentioned by the user. Use the user's exact words. (string or null)
-  Look for: "I missed a day", "skipped yesterday", "forgot to take it", "took half the dose",
-            "ran out for two days", "had to stop for a day", "double-dosed today"
-  If nothing notable is mentioned → null
+- - daily_doses: how many times per day is the substance taken? (integer or null)
+  Look for: "twice a day", "two times daily", "every 12 hours", "three times a day", "once daily"
+  Convert to integer: once=1, twice=2, three times=3, etc.
+  Only fill if explicitly stated. Do NOT infer from dose_number or duration.
+- notes: protocol deviations or compliance issues only. (string or null)
+  Look for: missed doses, skipped days, dose changes, supply issues.
+  Write as a SHORT factual note — maximum one sentence, no raw transcript quotes.
+  Examples of good notes: "missed one dose", "skipped two days", "halved dose on day 3"
+  If nothing notable → null
 
 Return ONLY a JSON array. One object per substance. Example:
 [
@@ -118,9 +122,10 @@ Return ONLY a JSON array. One object per substance. Example:
     "event_date_raw": "this morning",
     "start_date_raw": null,
     "duration_days": 10,
+    "daily_doses": 2,
     "is_completed": false,
     "is_historical": false,
-    "notes": null
+    "notes": "missed one dose on day 3"
   }
 ]
 
@@ -313,28 +318,44 @@ def _build_entity(mention: dict, signal: "dict | None", today: date) -> "dict | 
     dose_number = signal.get("dose_number")
     start_date_raw = signal.get("start_date_raw")
 
-    # Priority 1: explicit start_date from signal
+    # Priority 1: explicit start_date
     if start_date_raw:
         start_date = _resolve_date(start_date_raw, today)
 
-    # Priority 2: event_date + dose_number → start = event_date - (dose - 1)
+    # Priority 2: is_completed path
+    if start_date is None and signal.get("is_completed") and isinstance(duration_days, int) and duration_days >= 1:
+        if isinstance(dose_number, int) and dose_number == duration_days and event_date_raw:
+            dose_date = _resolve_date(event_date_raw, today)
+            if dose_date is not None:
+                start_date = dose_date - timedelta(days=duration_days - 1)
+                print(
+                    f"⚙️  intervention_pipeline: '{label}' is_completed, dose={dose_number}/{duration_days} "
+                    f"→ event_date is last dose, start={start_date.isoformat()}"
+                )
+        if start_date is None:
+            assumed_end = today - timedelta(days=1)
+            start_date = assumed_end - timedelta(days=duration_days - 1)
+            print(
+                f"⚙️  intervention_pipeline: '{label}' is_completed, dose_number unclear "
+                f"→ assuming end=yesterday, start={start_date.isoformat()}"
+            )
+
+    # Priority 3: event_date + dose_number
     if start_date is None and event_date_raw:
         dose_date = _resolve_date(event_date_raw, today)
         if dose_date is not None:
             if isinstance(dose_number, int) and dose_number >= 1:
                 start_date = dose_date - timedelta(days=dose_number - 1)
             else:
-                # No dose_number → event_date IS day 1
                 start_date = dose_date
 
-    # Priority 3: dose_number only → assume today is day N
+    # Priority 4: dose_number only
     if start_date is None and isinstance(dose_number, int) and dose_number >= 1:
         start_date = today - timedelta(days=dose_number - 1)
         print(
             f"⚙️  intervention_pipeline: dose_number={dose_number}, no event_date → "
             f"assuming today is day {dose_number}, start_date={start_date.isoformat()}"
         )
-
     # ── Start date guard — must be resolvable ──────────────────────────
     if start_date is None:
         print(
@@ -364,7 +385,18 @@ def _build_entity(mention: dict, signal: "dict | None", today: date) -> "dict | 
         status = "completed"
         print(f"⚙️  intervention_pipeline: '{label}' → end_date {end_date.isoformat()} is past, status=completed")
 
-    notes = signal.get("notes") or None
+    daily_doses = signal.get("daily_doses")
+    if not isinstance(daily_doses, int) or daily_doses < 1:
+        daily_doses = None
+
+    notes_parts = []
+    if daily_doses:
+        dose_label = {1: "once", 2: "twice", 3: "three times"}.get(daily_doses, f"{daily_doses}x")
+        notes_parts.append(f"{dose_label} daily")
+    raw_notes = signal.get("notes")
+    if raw_notes:
+        notes_parts.append(raw_notes)
+    notes = "; ".join(notes_parts) if notes_parts else None
 
     entity = {
         "type": "intervention",
@@ -373,6 +405,7 @@ def _build_entity(mention: dict, signal: "dict | None", today: date) -> "dict | 
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
         "duration_days": duration_days,
+        "daily_doses": daily_doses,
         "day_of_protocol": day,
         "notes": notes,
         "_substance_label": raw.lower(),
@@ -469,15 +502,50 @@ def run_intervention_pipeline(
             seen_labels.add(raw)
             deduped.append(mention)
 
-    # ── Entity construction ────────────────────────────────────────────
+   # ── Entity construction ────────────────────────────────────────────
     entities = []
     for mention in deduped:
         raw = mention.get("raw_mention", "").lower()
         sig = next((s for k, s in signal_map.items() if _labels_match(raw, k)), None)
         entity = _build_entity(mention, sig, today_date)
         if entity is None:
-            # _build_entity already logged the drop reason
             continue
         entities.append(entity)
 
-    return entities
+    # ── Entity-level deduplication — same substance may produce multiple entities
+    # (e.g. two mentions with different temporal_evidence but same substance)
+    # Keep the one with the most complete data: prefer completed > active, most fields filled.
+    deduped_entities = []
+    for entity in entities:
+        e_label = entity.get("_substance_label", entity.get("label", "")).lower()
+        duplicate = next(
+            (e for e in deduped_entities
+             if _labels_match(e_label, e.get("_substance_label", e.get("label", "")).lower())),
+            None
+        )
+        if duplicate is None:
+            deduped_entities.append(entity)
+        else:
+            # Keep completed over active; if both same status, keep the one with start_date
+            existing_status = duplicate.get("status")
+            new_status = entity.get("status")
+            if existing_status != "completed" and new_status == "completed":
+                deduped_entities.remove(duplicate)
+                deduped_entities.append(entity)
+                print(
+                    f"⚙️  intervention_pipeline [entity-dedup]: replacing '{e_label}' "
+                    f"({existing_status}) with completed entity"
+                )
+            elif duplicate.get("start_date") is None and entity.get("start_date") is not None:
+                deduped_entities.remove(duplicate)
+                deduped_entities.append(entity)
+                print(
+                    f"⚙️  intervention_pipeline [entity-dedup]: replacing '{e_label}' "
+                    f"(no start_date) with entity that has start_date"
+                )
+            else:
+                print(
+                    f"⚙️  intervention_pipeline [entity-dedup]: dropping duplicate '{e_label}'"
+                )
+
+    return deduped_entities

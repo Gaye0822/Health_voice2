@@ -753,6 +753,26 @@ def structure_mentions(mentions: list, normalized_text: str) -> list:
                     entity["event_date"] = hint
                     print(f"⚙️  event_date hint applied: {etype} '{label}' → event_date: '{hint}'")
                     break
+                
+    # Eğer entity'nin time field'ı bugüne işaret eden bir ifade içeriyorsa
+    # event_date hint yanlış yazılmış demektir — temizle.
+    _TODAY_TIME_SIGNALS = {
+        "this morning", "this afternoon", "this evening", "tonight",
+        "today", "just now", "right now", "this session"
+    }
+    for entity in entities:
+        if entity.get("type") not in EVENT_DATE_TYPES_APPLY:
+            continue
+        time_val = (entity.get("time") or "").strip().lower()
+        if time_val in _TODAY_TIME_SIGNALS:
+            if entity.get("event_date"):
+                print(
+                    f"⚙️  structure.py today-time override: '{entity.get('label')}' "
+                    f"time='{time_val}' → clearing event_date='{entity['event_date']}'"
+                )
+                entity["event_date"] = None
+
+    
 
     return _resolve_time_references(entities)
 

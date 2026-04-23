@@ -163,7 +163,8 @@ class InterventionEntity(BaseModel):
     start_date: Optional[str] = None   # LLM writes user's words ("two days ago", "last Monday"); schema_enforcer converts to date
     end_date: Optional[str] = None
     status: InterventionStatus = "active"  # default: active — most interventions are ongoing when reported
-    duration_days: Optional[int] = None   # total protocol length in days ("10 days" → 10); filled by LLM if stated
+    duration_days: Optional[int] = None 
+    daily_doses: Optional[int] = None     # total protocol length in days ("10 days" → 10); filled by LLM if stated
     day_of_protocol: Optional[int] = None  # calculated by schema_enforcer; which day of the protocol is today
     notes: Optional[str] = None
 
