@@ -294,12 +294,13 @@ def get_knowledge_for_prompt() -> str:
 # Transcripts
 # ─────────────────────────────────────────
 
-def save_transcript(raw_text: str, normalized_text: str, source: str) -> int:
+def save_transcript(raw_text: str, normalized_text: str, source: str, note_date=None) -> int:
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO transcripts (raw_text, normalized_text, source) VALUES (%s, %s, %s) RETURNING id",
-        (raw_text, normalized_text, source)
+        """INSERT INTO transcripts (raw_text, normalized_text, source, note_date)
+           VALUES (%s, %s, %s, %s) RETURNING id""",
+        (raw_text, normalized_text, source, note_date)
     )
     transcript_id = cur.fetchone()[0]
     conn.commit()
@@ -327,11 +328,14 @@ def get_transcript_by_id(transcript_id: int) -> dict:
 # Entities
 # ─────────────────────────────────────────
 
-def save_entities(entities: list, transcript_id: int, mentions: list = None):
+def save_entities(entities: list, transcript_id: int, mentions: list = None, note_date=None):
     """
     Save entities to DB.
     If an entity is marked unverified (low confidence mention or label not in KB),
     saves with unverified=True and adds to unverified_entities queue.
+    note_date: the actual date of the voice note.
+    entity_date: the actual date the event occurred (may differ from note_date
+    if event_date is "yesterday" etc — calculated by schema_enforcer).
     """
     conn = get_db_connection()
     cur = conn.cursor()
@@ -388,9 +392,9 @@ def save_entities(entities: list, transcript_id: int, mentions: list = None):
                             break
                     print(f"⚙️  unverified: '{raw_mention}' → '{label}' (inferred, not in mishearings)")
 
-        # For intake and machine only: if raw_mention differs from label → inferred, flag as unverified
+        # For intake, machine, and outside: if raw_mention differs from label → inferred, flag as unverified
         # Symptom labels are clinical interpretations by LLM — not flagged
-        if not unverified and entity_type in ("intake", "machine") and raw_mention and raw_mention.lower() != label.lower():
+        if not unverified and entity_type in ("intake", "machine", "outside") and raw_mention and raw_mention.lower() != label.lower():
             raw_lower = raw_mention.lower()
             mapped_canonical = kb_mishearing_map.get(raw_lower)
             if mapped_canonical != label.lower():
@@ -414,12 +418,89 @@ def save_entities(entities: list, transcript_id: int, mentions: list = None):
             if not context:
                 context = mention_info.get("context")
 
+        entity_date = entity.get("entity_date") or note_date
+        print(f"DEBUG save_entities: label={label}, entity_date={entity_date}, note_date={note_date}, entity keys={list(entity.keys())[:8]}")
         cur.execute(
-            """INSERT INTO entities (transcript_id, entity_type, label, attributes, unverified, flag_reason)
-               VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
-            (transcript_id, entity_type, label, json.dumps(entity), unverified, flag_reason)
+            """INSERT INTO entities (transcript_id, entity_type, label, attributes, unverified, flag_reason, note_date, entity_date)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            (transcript_id, entity_type, label, json.dumps(entity), unverified, flag_reason, note_date, entity_date)
         )
         entity_id = cur.fetchone()[0]
+
+        # Recurring detection + fuzzy matching — terminal only, no schema change
+        if entity_type == "symptom" and note_date is not None:
+            # 1. Exact recurring check — uses entity_date (actual event date)
+            cur.execute(
+                """SELECT COUNT(*), MIN(COALESCE(entity_date, note_date)), MAX(COALESCE(entity_date, note_date))
+                   FROM entities
+                   WHERE entity_type = 'symptom'
+                   AND LOWER(label) = LOWER(%s)
+                   AND COALESCE(entity_date, note_date) >= %s - INTERVAL '7 days'
+                   AND COALESCE(entity_date, note_date) < %s""",
+                (label, note_date, note_date)
+            )
+            row = cur.fetchone()
+            freq = row[0] if row else 0
+            first_seen = row[1] if row else None
+            last_seen = row[2] if row else None
+            if freq > 0:
+                print(f"🔁 RECURRING [{freq}x in past 7 days]: symptom '{label}' "
+                      f"| first: {first_seen} | last: {last_seen} | today: {note_date}")
+            else:
+                print(f"🆕 NEW symptom '{label}' | note_date: {note_date}")
+
+            # 2. Fuzzy match against all distinct symptom labels in DB (past 30 days)
+            cur.execute(
+                """SELECT DISTINCT label FROM entities
+                   WHERE entity_type = 'symptom'
+                   AND LOWER(label) != LOWER(%s)
+                   AND note_date >= %s - INTERVAL '30 days'""",
+                (label, note_date)
+            )
+            existing_labels = [r[0] for r in cur.fetchall()]
+            if existing_labels:
+                try:
+                    from rapidfuzz import fuzz
+
+                    # Anatomical body part tokens — if labels share no body part token,
+                    # they cannot be the same symptom regardless of string similarity.
+                    # Only true anatomical locations — NOT generic symptom words like pain/swelling
+                    # If two labels share no anatomical token, they cannot be the same symptom
+                    BODY_PARTS = {
+                        "eye", "knee", "joint", "lymph", "node", "groin", "elbow",
+                        "back", "head", "ear", "hand", "finger", "shoulder", "hip",
+                        "ankle", "foot", "toe", "neck", "chest", "stomach", "abdomen",
+                        "face", "jaw", "skin", "eyelid", "gland", "vision",
+                        "nocturia", "stool", "bowel", "sinusitis", "blepharitis",
+                        "vertigo", "headache", "tremor", "tingling",
+                    }
+
+                    def _body_tokens(s):
+                        return {w for w in s.lower().split() if w in BODY_PARTS}
+
+                    def _similarity(a, b):
+                        # Require at least one shared body part token
+                        if not (_body_tokens(a) & _body_tokens(b)):
+                            return 0
+                        # Use weighted combo: partial_ratio catches substrings,
+                        # token_sort_ratio handles reordering
+                        pr = fuzz.partial_ratio(a.lower(), b.lower())
+                        tsr = fuzz.token_sort_ratio(a.lower(), b.lower())
+                        return round((pr * 0.4 + tsr * 0.6), 1)
+
+                    matches = []
+                    for existing in existing_labels:
+                        score = _similarity(label, existing)
+                        if score >= 70:
+                            matches.append((existing, score))
+                    matches.sort(key=lambda x: x[1], reverse=True)
+                    if matches:
+                        match_str = " | ".join(f"'{m}' ({s}%)" for m, s in matches[:5])
+                        print(f"   🔍 FUZZY MATCHES for '{label}': {match_str}")
+                    else:
+                        print(f"   🔍 FUZZY: no similar labels found (threshold: 70%)")
+                except ImportError:
+                    print("   ⚠️  rapidfuzz not installed")
 
         # Add to unverified queue
         if unverified:
@@ -750,3 +831,189 @@ def get_entities_by_transcript(transcript_id: int) -> list:
          "unverified": row[3], "flag_reason": row[4]}
         for row in rows
     ]
+
+def get_symptom_fuzzy_matches(symptom_labels: list, note_date=None, days_back: int = 30) -> dict:
+    """
+    For a list of symptom labels, find fuzzy matches from DB (past N days).
+    Returns dict: label → list of (matched_label, score) tuples.
+    Read-only — used for review UI display, no writes.
+    """
+    if not symptom_labels:
+        return {}
+
+    from rapidfuzz import fuzz
+    from datetime import date
+
+    # Anatomical body part tokens — both labels must share at least one
+    # to be considered a valid match. Prevents cross-region false positives
+    # like "left elbow pain" matching "left eye pain" via shared "left".
+    BODY_PARTS = {
+        # Eye and face
+        "eye", "eyelid", "gland", "vision", "jaw", "face",
+        # Musculoskeletal
+        "knee", "elbow", "shoulder", "hip", "ankle", "foot", "toe",
+        "finger", "hand", "wrist", "back", "neck", "spine", "joint",
+        # Lymph / vascular
+        "lymph", "node", "groin",
+        # Internal / digestive
+        "chest", "stomach", "abdomen", "bowel", "stool",
+        # Neurological / ENT
+        "head", "ear", "sinus",
+        # Tracked phenomena with stable canonical labels
+        "nocturia", "blepharitis", "sinusitis", "vertigo",
+        "headache", "tremor", "tingling",
+    }
+
+    def _body_tokens(s):
+        return {w for w in s.lower().split() if w in BODY_PARTS}
+
+    def _similarity(a, b):
+        # Require at least one shared anatomical token
+        shared = _body_tokens(a) & _body_tokens(b)
+        if not shared:
+            return 0
+        pr = fuzz.partial_ratio(a.lower(), b.lower())
+        tsr = fuzz.token_sort_ratio(a.lower(), b.lower())
+        return round((pr * 0.4 + tsr * 0.6), 1)
+
+    today = note_date or date.today()
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    # Fetch all distinct symptom labels from past N days in one query
+    from datetime import timedelta
+    cutoff = today - timedelta(days=days_back)
+    cur.execute(
+        """SELECT DISTINCT label FROM entities
+           WHERE entity_type = 'symptom'
+           AND (note_date IS NULL OR note_date >= %s)""",
+        (cutoff,)
+    )
+    existing_labels = [r[0] for r in cur.fetchall()]
+    print(f"DEBUG fuzzy: symptom_labels={symptom_labels}")
+    print(f"DEBUG fuzzy: existing_labels={existing_labels}")
+    cur.close()
+    conn.close()
+
+    results = {}
+    for label in symptom_labels:
+        matched = []    # guard passed — valid matches
+        raw_scores = [] # guard failed — shown diagnostically only
+
+        for existing in existing_labels:
+            if existing.lower() == label.lower():
+                continue  # skip exact self-match
+            score = _similarity(label, existing)
+            if score > 0:
+                matched.append((existing, score))
+            else:
+                # Guard failed but show raw score for diagnostics
+                from rapidfuzz import fuzz as _fuzz
+                raw = round((_fuzz.partial_ratio(label.lower(), existing.lower()) * 0.4 +
+                             _fuzz.token_sort_ratio(label.lower(), existing.lower()) * 0.6), 1)
+                if raw > 0:
+                    raw_scores.append((existing, raw, "⚠️ no shared body token"))
+
+        matched.sort(key=lambda x: x[1], reverse=True)
+        raw_scores.sort(key=lambda x: x[1], reverse=True)
+
+        # Format: matched entries + diagnostic entries (marked)
+        results[label] = {
+            "matches": matched[:5],
+            "diagnostic": raw_scores[:3]
+        }
+
+    return results
+
+
+def get_symptom_recurring_info(symptom_labels: list, note_date=None, days_back: int = 7) -> dict:
+    """
+    For a list of symptom labels, check how many times each appeared in the DB
+    over the past N days. Matching uses both:
+      1. Body part guard — labels must share at least one anatomical token
+      2. Fuzzy score >= 80% — string similarity threshold
+    Both conditions must pass for a DB label to count as the same symptom.
+    Exact match always passes both conditions.
+    Returns dict: label → {frequency, first_seen, last_seen, dates, matched_labels}
+    Read-only — used for recurring enrichment, no writes.
+    """
+    if not symptom_labels:
+        return {}
+
+    from datetime import date, timedelta
+    from rapidfuzz import fuzz
+    today = note_date or date.today()
+    cutoff = today - timedelta(days=days_back)
+
+    # Anatomical body part tokens — same set as fuzzy matching
+    BODY_PARTS = {
+        "eye", "eyelid", "gland", "vision", "jaw", "face",
+        "knee", "elbow", "shoulder", "hip", "ankle", "foot", "toe",
+        "finger", "hand", "wrist", "back", "neck", "spine", "joint",
+        "lymph", "node", "groin",
+        "chest", "stomach", "abdomen", "bowel", "stool",
+        "head", "ear", "sinus",
+        "nocturia", "blepharitis", "sinusitis", "vertigo",
+        "headache", "tremor", "tingling",
+    }
+
+    def _body_tokens(s):
+        return {w for w in s.lower().split() if w in BODY_PARTS}
+
+    def _is_same_symptom(a, b):
+        """Returns True if both guard and fuzzy score >= 80 pass."""
+        if a.lower() == b.lower():
+            return True  # exact match always passes
+        # Guard: shared anatomical token required
+        if not (_body_tokens(a) & _body_tokens(b)):
+            return False
+        # Fuzzy: weighted combination >= 80
+        score = round(
+            fuzz.partial_ratio(a.lower(), b.lower()) * 0.4 +
+            fuzz.token_sort_ratio(a.lower(), b.lower()) * 0.6, 1
+        )
+        return score >= 80
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    # Fetch all distinct symptom labels + dates from past N days
+    # Uses entity_date (actual event date) not note_date (recording date)
+    cur.execute(
+        """SELECT label, COALESCE(entity_date, note_date) as effective_date FROM entities
+           WHERE entity_type = 'symptom'
+           AND COALESCE(entity_date, note_date) IS NOT NULL
+           AND COALESCE(entity_date, note_date) >= %s
+           AND COALESCE(entity_date, note_date) < %s
+           ORDER BY COALESCE(entity_date, note_date) ASC""",
+        (cutoff, today)
+    )
+    all_rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    results = {}
+    for label in symptom_labels:
+        matched_dates = []
+        matched_labels = set()
+
+        for db_label, db_date in all_rows:
+            if _is_same_symptom(label, db_label):
+                matched_dates.append(db_date)
+                if db_label.lower() != label.lower():
+                    matched_labels.add(db_label)
+
+        if matched_dates:
+            matched_dates.sort()
+            results[label] = {
+                "frequency_7d": len(matched_dates),
+                "first_seen": str(matched_dates[0]),
+                "last_seen": str(matched_dates[-1]),
+                "dates": [str(d) for d in matched_dates],
+                "matched_labels": list(matched_labels)  # fuzzy-matched variants
+            }
+        else:
+            results[label] = None
+
+    return results

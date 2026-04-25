@@ -189,6 +189,11 @@ If a knowledge base is provided at the end of this prompt:
 - If an entity label appears in the removal list → remove that entity entirely
   The reason explains why — use it to confirm the match before removing.
 
+SYMPTOM EXCEPTION — do NOT apply alias-based label corrections to symptom entities.
+Symptom labels are determined at extraction time using KB descriptions.
+For symptom entities: only apply entity_type corrections if explicitly required by KB.
+Never change a symptom label based on alias matching — leave it as extracted.
+
 For KB lookup: if you are unsure → leave unchanged.
 
 ─────────────────────────────────────────
@@ -401,16 +406,49 @@ If no changes needed, return original entities with empty changes list."""
                     e["type"] = original_type
 
         all_changes.extend(llm_changes)
+
+        # Restore internal fields (entity_date, dose_timing) that LLM may have dropped.
+        # These fields are computed deterministically by schema_enforcer and must survive
+        # the validate round-trip. Match by label + type.
+        INTERNAL_FIELDS = {"entity_date", "dose_timing"}
+        input_internal = {}
+        for e in to_validate:
+            key = (e.get("label", e.get("metric", e.get("linked_to", e.get("raw_text", "")))), e.get("type"))
+            preserved = {f: e[f] for f in INTERNAL_FIELDS if f in e and e[f] is not None}
+            if preserved:
+                input_internal[key] = preserved
+
+        for e in validated:
+            key = (e.get("label", e.get("metric", e.get("linked_to", e.get("raw_text", "")))), e.get("type"))
+            if key in input_internal:
+                for field, value in input_internal[key].items():
+                    if field not in e or e[field] is None:
+                        e[field] = value
+
         final_entities = _resolve_time_references(validated) + protected
 
-        # Re-validate through Pydantic to ensure all fields have defaults
+        # Re-validate through Pydantic to ensure all fields have defaults.
+        # Save internal fields before and restore after — Pydantic drops unknown fields.
         try:
             from core.models import EntityOutput
         except ImportError:
             from models import EntityOutput
         try:
+            # Save internal fields before Pydantic strips them
+            saved_internal = []
+            for e in final_entities:
+                saved = {f: e[f] for f in INTERNAL_FIELDS if f in e and e[f] is not None}
+                saved_internal.append(saved)
+
             reparsed = EntityOutput.model_validate({"entities": final_entities})
             final = [e.model_dump() for e in reparsed.entities]
+
+            # Restore internal fields after Pydantic
+            for i, e in enumerate(final):
+                if i < len(saved_internal):
+                    for field, value in saved_internal[i].items():
+                        if field not in e or e[field] is None:
+                            e[field] = value
         except Exception:
             final = final_entities
 

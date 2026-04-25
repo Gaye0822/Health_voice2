@@ -22,13 +22,13 @@ from datetime import date
 # ─────────────────────────────────────────
 
 SCHEMA_FIELDS = {
-    "intake":       {"type", "label", "action", "dose", "unit", "time", "event_date", "category", "is_intervention_dose", "day_of_protocol", "notes"},
-    "symptom":      {"type", "label", "status", "onset_time", "severity", "qualifier", "duration", "interval", "source", "event_date", "notes"},
-    "activity":     {"type", "label", "start_time", "end_time", "duration", "status", "event_date", "notes"},
-    "machine":      {"type", "label", "start_time", "end_time", "duration", "status", "event_date", "notes"},
+    "intake":       {"type", "label", "action", "dose", "unit", "time", "dose_timing", "event_date", "entity_date", "category", "is_intervention_dose", "day_of_protocol", "notes"},
+    "symptom":      {"type", "label", "status", "onset_time", "severity", "qualifier", "duration", "interval", "source", "event_date", "entity_date", "notes"},
+    "activity":     {"type", "label", "start_time", "end_time", "duration", "status", "event_date", "entity_date", "notes"},
+    "machine":      {"type", "label", "start_time", "end_time", "duration", "status", "event_date", "entity_date", "notes"},
     "device":       {"type", "label", "start_time", "status"},
     "measurement":  {"type", "metric", "value", "unit", "time", "source", "notes"},
-    "meal":         {"type", "label", "time", "eaten_out", "restaurant", "event_date", "description"},
+    "meal":         {"type", "label", "time", "eaten_out", "restaurant", "event_date", "entity_date", "description"},
     "intervention": {"type", "label", "start_date", "end_date", "status", "duration_days", "day_of_protocol", "notes"},
     "outcome":      {"type", "linked_to", "what", "onset_time", "qualifier", "direction"},
     "test":         {"type", "label", "time", "status", "result", "notes"},
@@ -625,14 +625,20 @@ def enrich_intervention_from_signals(entities: list, signals: list, today_date=N
 # MAIN ENFORCER
 # ─────────────────────────────────────────
 
-def enforce_schema(entities: list) -> tuple:
+def enforce_schema(entities: list, note_date=None) -> tuple:
     """
     Apply all deterministic fixes to a list of entities.
     Returns (clean_entities, violations_log).
 
+    note_date: the actual date of the voice note (from Created_at).
+    If None, falls back to date.today().
+
     Intervention enrichment is handled separately via apply_enrichment_only()
     after enforce_schema() completes — never pass signals here.
     """
+    from datetime import date
+    today_date = note_date if note_date is not None else date.today()
+
     clean = []
     violations = []
 
@@ -662,7 +668,25 @@ def enforce_schema(entities: list) -> tuple:
         e = fix_measurement_value(e)
 
         # 7. Calculate day_of_protocol for intervention and intake
-        e = calculate_day_of_protocol(e)
+        e = calculate_day_of_protocol(e, today_date=today_date)
+
+        # 8. Calculate entity_date — the actual date the event occurred
+        #    event_date: null → today (note_date)
+        #    event_date: "yesterday" → note_date - 1
+        #    event_date: "two days ago" etc → resolved via RELATIVE_DATE_OFFSETS
+        etype = e.get("type", "")
+        if etype in {"intake", "symptom", "activity", "machine", "meal"}:
+            from datetime import timedelta
+            event_date_raw = e.get("event_date")
+            if not event_date_raw:
+                e["entity_date"] = str(today_date)
+            else:
+                resolved = _resolve_start_date_to_iso(str(event_date_raw), today_date)
+                if resolved:
+                    e["entity_date"] = str(resolved)
+                else:
+                    # Unresolvable phrase — fall back to note_date
+                    e["entity_date"] = str(today_date)
 
         # 5. Remove entities flagged for removal
         if e.pop("_remove", False):
@@ -679,18 +703,21 @@ def enforce_schema(entities: list) -> tuple:
 
 
 
-def apply_enrichment_only(entities: list, intervention_signals: list) -> list:
+def apply_enrichment_only(entities: list, intervention_signals: list, note_date=None) -> list:
     """
     Apply ONLY intervention enrichment signals to an already-enforced entity list.
     Does NOT re-run full enforce_schema — avoids double-applying field fixes
     and prevents fallback calculations from overwriting enricher results.
 
+    note_date: the actual date of the voice note (from Created_at).
     Call this after enforce_schema() when enricher signals are ready.
     Returns the updated entity list.
     """
+    from datetime import date
+    today_date = note_date if note_date is not None else date.today()
     if not intervention_signals:
         return entities
-    return enrich_intervention_from_signals(entities, intervention_signals)
+    return enrich_intervention_from_signals(entities, intervention_signals, today_date=today_date)
 
 def log_violations(violations: list):
     if violations:

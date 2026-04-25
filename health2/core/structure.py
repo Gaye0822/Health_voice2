@@ -16,6 +16,19 @@ except ImportError:
     from models import get_entity_tool_schema, ENTITY_SCHEMAS, EntityOutput
 
 
+def _get_knowledge_context() -> str:
+    """Inject KB symptom registry into structure prompt for description-based label matching."""
+    try:
+        from core.db import get_knowledge_for_prompt
+        return get_knowledge_for_prompt()
+    except Exception:
+        try:
+            from db import get_knowledge_for_prompt
+            return get_knowledge_for_prompt()
+        except Exception:
+            return ""
+
+
 STRUCTURE_TOOL = {
     "name": "extract_entities",
     "description": (
@@ -152,6 +165,40 @@ For each mention, work through these questions before writing the entity:
    "I have sinusitis" → symptom.
    "I caught rhinovirus from X" or "I have the rhinovirus" → context, not symptom.
    The pathogen name is background information. The actual symptoms are what get extracted.
+
+   SYMPTOM LABEL STANDARDIZATION — apply to every symptom label:
+   Labels must always be written in the simplest, most general clinical form.
+   The goal is consistency across notes so the same symptom always gets the same label.
+
+   Rules:
+   - Use a noun phrase, not a verb or adjective: "swelling" not "swollen", "pain" not "hurts"
+   - Keep anatomical location only when it is clinically necessary to distinguish:
+     "knee pain" ✅ (location matters), "lymph node swelling" ✅ (not "groin lymph node swelling")
+   - Never put severity, qualifier, or user's emotional language in the label:
+     "disaster lymph nodes" → label: "lymph node swelling"
+     "knees absolutely shot" → label: "knee pain"
+   - Qualifier field captures the user's descriptive language — label does not:
+     "knees really really hurt" → label: "knee pain", qualifier: "severe, bilateral"
+     "eye is super bruised and swollen" → label: "eye swelling", qualifier: "bruised"
+   - Use established clinical terms when the user's language maps clearly to one:
+     "blepharitis acting up" → label: "blepharitis" (known clinical term, keep it)
+     "glands are messed up" → label: "lymph node swelling" (normalize informal language)
+     "nocturia" → label: "nocturia" (already canonical, keep it)
+   - Laterality goes in qualifier, not label:
+     "both knees hurt" → label: "knee pain", qualifier: "bilateral"
+     "left elbow destroyed" → label: "left elbow pain" (left kept — clinically distinguishing)
+
+   Examples:
+   "my lymph nodes are swollen and a disaster" → label: "lymph node swelling"
+   "swollen lymph nodes in groin, super painful" → label: "lymph node swelling", qualifier: "bilateral groin, severe"
+   "glands are still sore" → label: "lymph node swelling"
+   "eye swelling and bruising lines" → label: "eye swelling", qualifier: "bruised"
+   "blepharitis" → label: "blepharitis"
+   "knees both really really hurt" → label: "knee pain", qualifier: "bilateral, severe"
+   "left elbow completely broken, immovable" → label: "left elbow pain", qualifier: "immovable"
+   "stool is still messed up" → label: "stool consistency"
+   "vertigo episode, small" → label: "vertigo", qualifier: "mild"
+   "major headache" → label: "headache", qualifier: "major"
 
    ABSENCE RULE — THREE STATES:
    Symptoms have three possible states. Only two are ever captured:
@@ -292,7 +339,27 @@ DOSE FIELD:
 - Ranges, approximations, or vague quantities ("two or three", "a few", "some", "a couple") → null
 - When in doubt → null
 
-TIME FIELDS:
+TIME FIELD (intake only):
+- Clock time only: "9:00 PM", "8:00 AM", "late"
+- Do NOT put dose slot names here ("morning", "dinner") — use dose_timing instead
+- Relative phrases ("recently", "last week") → null
+
+DOSE_TIMING FIELD (intake only):
+- The named dose slot within the day: "morning", "lunch", "dinner", "bedtime", "night"
+- Fill whenever the user refers to a specific daily dose slot, even without a clock time
+- CRITICAL: If the raw_mention in the mention list contains a dose slot word
+  (e.g. "HMB lunch dose", "HMB bedtime dose"), extract that slot word into dose_timing.
+  The label must be the substance name only ("HMB"), and dose_timing gets the slot ("lunch").
+  Never leave dose_timing null when the slot is present in the mention's raw_mention.
+- Examples:
+  "took the morning one" → label: "HMB", dose_timing: "morning"
+  "forgot the dinner dose" → label: "HMB", dose_timing: "dinner"
+  raw_mention "HMB lunch dose" → label: "HMB", dose_timing: "lunch"
+  raw_mention "HMB bedtime dose" → label: "HMB", dose_timing: "bedtime"
+  "took it at 9 PM" (no slot name given) → dose_timing: null, time: "9:00 PM"
+- null only if no dose slot is present anywhere in the mention or transcript context
+
+TIME FIELDS (non-intake):
 - Clock time, date, or named period (morning, evening) only
 - Relative phrases ("recently", "last week", "three weeks ago") → null
 - Put timing context in notes if relevant
@@ -424,25 +491,36 @@ MEASUREMENT VALUE RULE:
 
 THEORY LINKED_TO RULE:
 - Always try to fill linked_to_label and linked_to_type.
-- Look at what was discussed just before or after the theory — that is almost always
-  what the theory is about. Link to it.
+- linked_to must be semantically related to what the theory is ABOUT — not the nearest
+  entity in the transcript. Proximity is not the criterion; semantic relevance is.
+- Ask: "What is the user's speculation actually about?" → link to that entity.
+- If the theory is about a symptom → link to that symptom.
+- If the theory is about a substance or activity → link to that intake or activity.
+- NEVER link a theory to an entity just because it appeared nearby in the transcript.
 - Only leave linked_to_label null if the theory genuinely cannot be connected to
   any specific entity in this note.
 - Examples:
-  "I don't know what's going on with my stomach" → linked_to_label: "stool consistency",
-  linked_to_type: "symptom" (stomach issues were just discussed)
-  "Maybe it's the cold plunge affecting my HRV" → linked_to_label: "cold plunge",
-  linked_to_type: "activity"
-  "I have no idea why I slept so well" → linked_to_label: "sleep quality",
-  linked_to_type: "measurement"
+  "maybe the cold plunge affected my HRV" → the theory is ABOUT cold plunge →
+    linked_to_label: "cold plunge", linked_to_type: "activity" ✅
+  "no normal human being gets Demodex every six months, something is very wrong" →
+    the theory is ABOUT Demodex/blepharitis pattern →
+    linked_to_label: "blepharitis", linked_to_type: "symptom" ✅
+    NOT linked to "joint swelling" just because it appeared earlier ❌
+  "I don't know what's going on with my stomach" → theory is about stomach/gut →
+    linked_to_label: "stool consistency", linked_to_type: "symptom" ✅
   "I don't know, life sucks" → linked_to_label: null (genuinely unconnected)
 
 THEORY MERGE RULE:
-- If multiple theories share the same linked_to_label, merge them into a single theory.
-- Combine their raw_text into one concise sentence covering all speculations.
-- Example: two theories both linked_to_label: "abdominal pain" →
-  merge into one: "mushrooms or eggplant may be causing digestive issues"
-- Never produce two theory entities with the same linked_to_label.
+- Merge ONLY when two theories are speculating about the exact same thing in the same direction.
+- The test: would merging them lose any distinct speculative claim the user made? If yes → keep separate.
+- If multiple theories share the same linked_to_label BUT express different speculations → keep separate.
+- If they share the same linked_to_label AND are essentially the same speculation → merge.
+- When merging, preserve the user's own words from both — do NOT rewrite into a clinical summary.
+- Example of correct merge: two theories both about "stool consistency" where user speculates
+  mushrooms OR eggplant caused it → merge: "mushrooms or eggplant may be causing the stool issues"
+- Example of incorrect merge: one theory about Demodex infection frequency, another about
+  systemic immune dysfunction — these are distinct speculations, keep separate even if
+  they share the same linked_to_label.
 
 LABEL RULE:
 - Specific named entity only
@@ -486,11 +564,22 @@ MEAL RULE:
 
 RAW_TEXT FIELD (outside, context, theory):
 - Keep raw_text short and descriptive — one sentence maximum
-- Summarize what it is about, do not copy the full transcript passage
 - outside: "Eight Sleep vs Oura divergence since PONS therapy" not the full paragraph
 - context: "switched to carbs for easier digestion due to stomach issues" not the full explanation
-- theory: state the core speculation in one sentence
-- NEVER copy more than ~15 words directly from the transcript into raw_text
+
+- THEORY raw_text — SPECIAL RULE:
+  Use the user's own speculative language as closely as possible.
+  Do NOT summarize, interpret, or rewrite into clinical language.
+  The raw_text should sound like the user, not like a medical summary.
+  Minimize paraphrasing — preserve the user's own words and phrasing.
+  It is acceptable to lightly trim for length, but the voice must remain the user's.
+  Examples:
+  User says: "no normal human being gets a Demodex infection every six months, it's always around viral or bacterial infection, something is very wrong with the broader system"
+  → raw_text: "no normal human being gets Demodex every six months — always around infection — something very wrong with the system" ✅
+  → NOT: "recurring Demodex infection pattern indicates underlying immune dysfunction" ❌ (LLM interpretation)
+  → NOT: "abnormal infection frequency suggests systemic issue" ❌ (clinical rewrite)
+
+- For outside and context: summarize concisely, do not copy verbatim
 
 CONTEXT ENTITY RULE:
 Before creating a context entity, answer both:
@@ -642,6 +731,18 @@ def structure_mentions(mentions: list, normalized_text: str) -> list:
     # Priority: temporal_evidence="explicit_past" + event_date_label (set by mention.py)
     # Fallback: "yesterday" string in reasoning or context
     EVENT_DATE_TYPES_HINT = {"meal", "intake", "symptom", "activity", "machine"}
+
+    # Dose timing slot words — extracted deterministically from context
+    DOSE_TIMING_SLOTS = {
+        "morning": "morning",
+        "lunch": "lunch",
+        "dinner": "dinner",
+        "bedtime": "bedtime",
+        "night": "night",
+        "evening": "evening",
+        "afternoon": "afternoon",
+    }
+
     for m in mentions:
         ctype = m.get("candidate_type")
         if ctype not in EVENT_DATE_TYPES_HINT:
@@ -650,19 +751,49 @@ def structure_mentions(mentions: list, normalized_text: str) -> list:
             edl = m.get("event_date_label")
             if edl:
                 m["_event_date_hint"] = edl
-                continue
-        reasoning = m.get("reasoning", "").lower()
-        context_text = m.get("context", "").lower()
-        if "yesterday" in reasoning or "yesterday" in context_text:
-            m["_event_date_hint"] = "yesterday"
+                # Do NOT continue — still check dose_timing below
+        else:
+            reasoning = m.get("reasoning", "").lower()
+            context_text = m.get("context", "").lower()
+            if "yesterday" in reasoning or "yesterday" in context_text:
+                m["_event_date_hint"] = "yesterday"
+
+        # Deterministic dose_timing injection for intake mentions
+        # Extract slot word from context if present and dose_timing not already set
+        if ctype == "intake" and not m.get("_dose_timing_hint"):
+            context_text = m.get("context", "").lower()
+            reasoning_text = m.get("reasoning", "").lower()
+            search_text = context_text + " " + reasoning_text
+            for slot_word, slot_value in DOSE_TIMING_SLOTS.items():
+                if slot_word in search_text:
+                    m["_dose_timing_hint"] = slot_value
+                    print(f"⚙️  dose_timing hint: '{m.get('raw_mention')}' → dose_timing: '{slot_value}'")
+                    break
 
     mentions_json = json.dumps(mentions, indent=2)
+
+    # Inject KB symptom registry for description-based label matching
+    knowledge = _get_knowledge_context()
+    structure_system = SYSTEM_PROMPT
+    if knowledge:
+        kb_section = (
+            "\n\n─────────────────────────────────────────\n"
+            "SYMPTOM LABEL MATCHING — KB REGISTRY\n"
+            "─────────────────────────────────────────\n"
+            "Before finalizing any symptom label, check the canonical term registry below.\n"
+            "For each symptom entity, read the description of registry entries with entity_type: symptom.\n"
+            "If the symptom being structured matches a registry entry's description: use that canonical label.\n"
+            "Match based on the clinical description, not just keyword overlap.\n"
+            "If no registry entry matches, apply standard symptom label standardization rules.\n"
+            "NEVER change a label based on alias or name similarity alone, only match via description.\n"
+        ) + "\n" + knowledge
+        structure_system = SYSTEM_PROMPT + kb_section
 
     response = client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=6000,
         temperature=0,
-        system=SYSTEM_PROMPT,
+        system=structure_system,
         tools=[STRUCTURE_TOOL],
         tool_choice={"type": "any"},
         messages=[
@@ -725,34 +856,53 @@ def structure_mentions(mentions: list, normalized_text: str) -> list:
     EVENT_DATE_TYPES_APPLY = {"meal", "intake", "symptom", "activity", "machine"}
 
     def _event_date_labels_match(raw: str, entity_label: str) -> bool:
-        STOP = {"course", "protocol", "supplement", "dose", "medication",
-                "breakfast", "lunch", "dinner", "meal"}
+        # Do NOT include dose_timing slot words (lunch, dinner, morning, bedtime)
+        # in STOP — they are meaningful identifiers for matching the right dose entity.
+        STOP = {"course", "protocol", "supplement", "dose", "medication", "meal"}
         ta = {t for t in raw.split() if t not in STOP and len(t) > 2}
         tb = {t for t in entity_label.split() if t not in STOP and len(t) > 2}
         if ta & tb:
             return True
         return raw in entity_label or entity_label in raw
 
-    mention_hint_map: dict = {}
+    # Build hint list from explicit_past mentions only.
+    # Multiple mentions with same label are kept as a list — order matters for matching.
+    # Each entry: {raw_key, event_date_hint, dose_timing_hint}
+    hint_list = []
     for m in mentions:
-        hint = m.get("_event_date_hint")
-        if hint:
-            raw_key = m.get("raw_mention", "").lower()
-            mention_hint_map[raw_key] = hint
+        temporal = m.get("temporal_evidence", "")
+        event_hint = m.get("_event_date_hint") if temporal == "explicit_past" else None
+        dose_hint = m.get("_dose_timing_hint")
+        if event_hint or dose_hint:
+            hint_list.append({
+                "raw_key": m.get("raw_mention", "").lower(),
+                "event_date_hint": event_hint,
+                "dose_timing_hint": dose_hint,
+                "used": False
+            })
 
-    if mention_hint_map:
+    if hint_list:
         for entity in entities:
             etype = entity.get("type")
             if etype not in EVENT_DATE_TYPES_APPLY:
                 continue
-            if entity.get("event_date"):
-                continue
             label = entity.get("label", "").lower()
-            for raw_key, hint in mention_hint_map.items():
-                if _event_date_labels_match(raw_key, label):
-                    entity["event_date"] = hint
-                    print(f"⚙️  event_date hint applied: {etype} '{label}' → event_date: '{hint}'")
-                    break
+            # Find first unused matching hint
+            for hint_entry in hint_list:
+                if hint_entry["used"]:
+                    continue
+                if not _event_date_labels_match(hint_entry["raw_key"], label):
+                    continue
+                # Apply event_date hint if entity doesn't already have one
+                if hint_entry["event_date_hint"] and not entity.get("event_date"):
+                    entity["event_date"] = hint_entry["event_date_hint"]
+                    print(f"⚙️  event_date hint applied: {etype} '{label}' → event_date: '{hint_entry["event_date_hint"]}'")
+                # Apply dose_timing hint if entity doesn't already have one
+                if hint_entry["dose_timing_hint"] and not entity.get("dose_timing"):
+                    entity["dose_timing"] = hint_entry["dose_timing_hint"]
+                    print(f"⚙️  dose_timing hint applied: {etype} '{label}' → dose_timing: '{hint_entry["dose_timing_hint"]}'")
+                hint_entry["used"] = True
+                break
                 
     # Eğer entity'nin time field'ı bugüne işaret eden bir ifade içeriyorsa
     # event_date hint yanlış yazılmış demektir — temizle.

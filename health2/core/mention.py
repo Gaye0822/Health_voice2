@@ -84,6 +84,16 @@ Before assigning a type to anything, ask these three questions in order:
    Or is it vague, general, or descriptive of a mood or passing feeling?
    If it cannot be named specifically → omit.
 
+   ANATOMICAL LOCATION RULE — for symptoms:
+   The anatomical location must be explicitly stated by the user in this sentence
+   or its immediate context. Do NOT infer location from surrounding notes or
+   previous mentions in the same transcript.
+   "definitely swollen today" → location unknown → omit or label as "swelling" only ❌
+   "my lymph nodes are swollen" → location explicit → lymph node swelling ✅
+   "knees are swollen" → location explicit → knee swelling ✅
+   If the user says "swollen" without specifying what → use "swelling" as label,
+   do not infer the anatomical site from context.
+
 Only extract a mention if all three questions pass.
 
 ─────────────────────────────────────────
@@ -166,6 +176,25 @@ symptom
   In your reasoning, explicitly state whether this symptom occurred yesterday or today.
   This helps structure.py set event_date correctly.
   Example: "stomach was in major pain all day yesterday" → reasoning should note "occurred yesterday"
+
+  EXPERIENCED STATE EXCEPTION — applies to symptoms only:
+  If the user describes a subjective state they are currently experiencing using
+  present-tense language ("it's making me X", "I am X", "I've been feeling X"),
+  assign temporal_evidence: explicit_today — even if the cause is an ongoing protocol.
+  The distinction: the user is reporting what they are experiencing RIGHT NOW, not
+  describing a habit or routine.
+
+  This exception applies ONLY when:
+  - The state is a clinically nameable finding (irritability, cognitive impairment, fatigue)
+  - The user uses present-tense first-person language about their current state
+  - The state is not a device-tracked metric (HRV, heart rate → never symptom)
+
+  Examples:
+  "it's making me super irritable" → symptom: irritability, explicit_today ✅
+  "I am a complete mess" → too vague, omit ❌
+  "I've been irritable all week" → active_regimen (pattern, not present moment) ❌
+  "it's spiking my heart rate" → device metric, never symptom ❌
+  "I take HMB every morning" → intake habit, active_regimen — NOT this exception ❌
 
   ABSENCE RULE:
   There are three states for any symptom:
@@ -362,6 +391,24 @@ intervention
   If only protocol context, no dose event → intervention only.
   If only dose event, no protocol → intake only.
 
+  CRITICAL — PRESCRIPTION ANTIBIOTICS AND MEDICATIONS:
+  When the user mentions a prescription medication with a total duration or dose count,
+  this is ALWAYS an intervention signal — even if the primary sentence is about a single dose.
+  Do not let the intake action (took, didn't take) cause you to miss the protocol signal.
+
+  "I took my second 100mg dose, I'm doing 10 days at 100mg" →
+    intervention (doxycycline, 10-day course) + intake (doxycycline, took, last night) ✅
+  "Last night around 9 PM I took my second hundred mg dose, I'm just gonna do 10 days at 100mg" →
+    intervention (doxycycline) + intake (doxycycline, took, last night) ✅
+    The protocol signal "10 days at 100mg" makes this an intervention regardless of
+    the fact that a specific dose is also being reported.
+
+  DUAL EXTRACTION CHECKLIST — run this before finalizing any intake mention:
+  1. Is there a total duration or dose count? ("10 days", "20 injections", "a month") → intervention signal
+  2. Is there a day number? ("day 4", "second dose", "third session") → intervention signal
+  3. Is there "course", "protocol", "until told otherwise"? → intervention signal
+  If ANY of these is present → extract intervention mention IN ADDITION to intake mention.
+
   Do NOT apply duration checks, coexistence rules, or any other protocol validation here.
   Extract the signal and move on — the intervention pipeline handles everything else.
 
@@ -442,17 +489,32 @@ theory
   or health outcomes. If the speculation is about a device, system, data quality,
   or is addressed to someone else → outside, not theory.
 
+  DEVICE METRIC RULE — NEVER extract theories about HRV, heart rate, SpO2,
+  sleep score, or any other automatically device-tracked metric.
+  These metrics already exist in a stronger device fact layer.
+  A note-derived theory about them creates a competing weaker version — do not do this.
+  "new medication could be affecting HRV and heart rate" → OMIT ❌
+  "maybe cold plunge caused HRV drop" → OMIT ❌
+  "HRV has reached bottom, was previously inflated" → OMIT ❌
+  If the speculation is about a non-device symptom and HRV appears only as
+  supporting context → omit the HRV reference, keep the rest if it stands alone.
+
+  HOPE/EXPECTATION RULE — NEVER extract hopes or expectations as theories:
+  "hoping this resolves", "fingers crossed", "I hope X goes away" → OMIT ❌
+  A theory requires an explicit causal or mechanistic claim, not a wish.
+
   These ARE theories:
-  - "Maybe the cold plunge affected my HRV" → own body ✅
-  - "I think the paracetamol is reducing my nocturia" → own body ✅
+  - "I think the paracetamol is reducing my nocturia" → own body, causal claim ✅
   - "Probably stress caused it" → own body ✅
   - "Could be the stem cells" → own body ✅
+  - "no normal human being gets Demodex every six months — something very wrong" → own body ✅
 
-  These are NOT theories → outside:
-  - "Oura data is complete garbage" → device quality, not own body ❌
-  - "The team should use Loop instead" → addressed to others ❌
-  - "Eight Sleep is more accurate than Oura" → device comparison ❌
-  - "The system needs to handle this better" → meta-commentary ❌
+  These are NOT theories → OMIT or outside:
+  - "Maybe cold plunge affected my HRV" → device metric → OMIT ❌
+  - "new medication could be affecting HRV" → device metric → OMIT ❌
+  - "hoping vertigo is resolved" → hope, not speculation → OMIT ❌
+  - "Oura data is complete garbage" → device quality → outside ❌
+  - "The team should use Loop instead" → addressed to others → outside ❌
 
   Also use for clinician recommendations or proposed future interventions
   the user is relaying but has not yet acted on.
@@ -468,6 +530,32 @@ outside
   If something is about the user's own body or health — even if it cannot be
   extracted as a symptom, intake, or any other type — it is NOT outside.
   Omit it entirely rather than routing it to outside.
+
+  EXCEPTION — QUESTIONS DIRECTED AT THE TEAM OR EXTERNAL PARTIES:
+  If the user asks a question addressed to another person or the team about
+  their own health — even if the subject is their body — extract as outside,
+  subtype: operational.
+  The key signal: is the user asking someone else to do something or look something up?
+  "Is there anything in the literature about X?" → outside, operational ✅
+  "Can you check whether Y affects Z?" → outside, operational ✅
+  These are requests for external action, not health event recordings.
+
+  MIXED SENTENCE RULE — theory + outside in the same sentence:
+  If a sentence contains BOTH a speculative claim AND a request directed at the team,
+  extract TWO separate mentions — one theory, one outside.
+  Do NOT collapse them into a single theory or a single outside.
+  The speculative part → theory.
+  The directed request part → outside, operational.
+
+  Key signals for the directed request part:
+  "someone can please remind me", "can you check", "please look into",
+  "can someone find out", "let me know if", "can you remind me"
+
+  Example:
+  "I think there's more Boswellia or NAC for post-concussion but someone can please remind me" →
+    theory: "Boswellia or NAC may help with post-concussion recovery" ✅
+    outside: "team reminder requested for post-concussion protocol" ✅
+  Extract both — do not merge into one.
 
   outside is NOT a catch-all or fallback category. Do not use it for:
   - General health feelings or states ("exhaustion pattern", "feeling off")
@@ -560,6 +648,20 @@ explicit_past    — happened on a specific named past day, not today
                    be explicit_today if the user is describing a device-tracked overnight period
                    that is part of today's health session. Use judgment based on context.
 
+                   CONTEXTUAL DATE REFERENCE RULE:
+                   Phrases like "the same day", "that day", "that same day", "that evening"
+                   refer to a previously mentioned day — not today.
+                   Look back in the transcript for the temporal anchor and use that day.
+                   "didn't have nocturia last night... had an IV the same day" →
+                     "last night" = yesterday → IV event_date_label: "yesterday" ✅
+                   "I did X on Monday... the same day I also took Y" →
+                     event_date_label: "Monday" ✅
+                   Do NOT write "the same day" as event_date_label — resolve it to the
+                   actual anchor day from context.
+                   If the anchor day cannot be clearly identified from context →
+                   default to event_date_label: "yesterday" since "the same day"
+                   always refers to a past day, never today.
+
                    RETRACTION / COMPARISON EXCEPTION:
                    "yesterday" does not always mean the event happened yesterday.
                    Watch for these patterns before assigning explicit_past:
@@ -631,6 +733,15 @@ If eliminated → note why and continue to next step.
 STEP 2 — ELIMINATE symptom:
 Answer all:
 - Is this general energy, fatigue, weakness, or sleep difficulty? → If yes: OMIT
+- Is this a device-tracked metric — heart rate, HRV, SpO2, sleep score, recovery score?
+  → If yes: OMIT. These are NEVER symptoms, regardless of how clinical they sound.
+  HARD STOP — no exceptions:
+  "heart rate elevated" → device metric → OMIT ❌
+  "heart rate never recovered" → device metric → OMIT ❌
+  "HRV is down" → device metric → OMIT ❌
+  "SpO2 low" → device metric → OMIT ❌
+  The device pipeline already has this data. A note-derived symptom creates a
+  competing weaker version — do not extract.
 - Did the user explicitly dismiss this? → If yes: OMIT
 - Is this an expected after-effect of an activity? → If yes: OMIT (activity notes)
 - Is the user using causal or explanatory language rather than reporting a finding?
@@ -650,6 +761,123 @@ If eliminated → note why and continue.
 STEP 3 — ELIMINATE theory:
 - Did the user make an explicit speculative claim in their own words? → If no: OMIT
 - Is this confusion, hope, dismissal, or emotional reaction? → If yes: OMIT
+  HARD STOP — these are NEVER theories, no exceptions:
+  "hoping that was all in the past" → hope → OMIT
+  "I hope this goes away" → hope → OMIT
+  "fingers crossed" → hope → OMIT
+  "I don't understand what's going on" → confusion → OMIT
+  "God knows", "who knows" → emotional reaction → OMIT
+
+- MANDATORY CAUSAL CLAIM TEST — before extracting any theory, verify TWO things:
+
+  PART A — Two distinct entities required:
+  The speculation must involve a CAUSE (X) and an EFFECT (Y) — two different things.
+  Complete this sentence: "The user is claiming that [X] might/could/probably cause or explain [Y]."
+  X and Y must be different entities. If only one entity is present → OMIT.
+
+  These FAIL because only one entity is described (no X→Y structure):
+  "HRV has reached bottom" → only HRV described, no cause → OMIT
+  "we knew HRV was inflated" → past fact about HRV only, no cause → OMIT
+  "heart rate is very low" → observation about one thing, no cause → OMIT
+  "irritability is down" → state description, no cause → OMIT
+
+  These PASS because X causes Y:
+  "peptides could be causing nocturia through kidney effects" → X=peptides, Y=nocturia ✅
+  "maybe the cold plunge is affecting my lymph nodes" → X=cold plunge, Y=lymph nodes ✅
+  "I think the antibiotic is reducing the eye swelling" → X=antibiotic, Y=eye swelling ✅
+
+  PART B — Must be user's own speculative language:
+  The user must use hedging/speculative words: "maybe", "could be", "I think", "probably",
+  "I don't know if", "might be", "I guess", "I wonder if", "seems like", "appears to".
+  Factual statements, past observations, and retrospective summaries are NOT theories
+  even if they describe something uncertain.
+  "we knew that was inflated" → stated as known fact → OMIT
+  "it seems to have reached the bottom" → observation, no speculation → OMIT
+  "maybe the peptide is causing this" → explicit speculation ✅
+
+  ALTERNATING HYPOTHESIS RULE:
+  When the user presents two or more alternative explanations using "or", "either/or",
+  "that or", "maybe X or maybe Y" → this IS speculative language. Extract as theory.
+  The user is explicitly weighing competing hypotheses about their own body.
+  Do NOT omit just because the sentence is complex or references a prior clause.
+
+  SINGLE MENTION RULE for alternatives:
+  If the user lists multiple alternative CAUSES for the same EFFECT using "or" →
+  extract ONE mention, not multiple. The raw_mention should capture all alternatives.
+  "Boswellia or NAC for post-concussion" → ONE theory mention (both alternatives, same effect) ✅
+  "second bug or medication not working" → ONE theory mention (both alternatives, same stool issue) ✅
+  Do NOT split into separate mentions when X1 or X2 → same Y.
+  Only split when the alternatives have clearly different effects or topics.
+
+  CONTEXTUAL REFERENCE RULE:
+  When the user uses "that or X" or "either that or X" — "that" refers to something
+  previously mentioned. Look at the surrounding sentences to identify what "that" means.
+  Do NOT omit just because X alone seems incomplete — the full theory is X vs "that".
+  "there's gotta be something else... that or the medication's not working" →
+    "that" = second infection, medication = alternative cause → theory about stool issues ✅
+    X=second infection OR medication, Y=stool problems → extract as theory
+  "I don't know if it's X or that" → same pattern, look back for "that" → theory ✅
+
+  SELF-DISMISSAL EXCEPTION:
+  If the user says "maybe it's psychological" alongside another causal claim, this does
+  NOT eliminate the theory — it is part of the speculation. The user is offering
+  "psychological" as one alternative hypothesis. Extract the full speculation including
+  both alternatives.
+  "maybe it's psychological but it seems like the nuts are hurting my stomach" →
+    two alternative hypotheses → theory ✅ (do not dismiss because of "psychological")
+
+  If BOTH parts pass → extract as theory.
+  If EITHER part fails → OMIT.
+
+  Examples:
+  "new peptides could be that with what they do to the kidneys" →
+    Part A: X=peptides, Y=nocturia (two entities) ✅
+    Part B: "could be" = speculative language ✅ → theory
+  "maybe it's psychological but it seems like the nuts in the fiber are hurting my stomach" →
+    Part A: X=nuts/fiber, Y=stomach pain ✅
+    Part B: "maybe", "seems like" = speculative language ✅
+    "maybe it's psychological" = alternative hypothesis, not dismissal ✅ → theory
+  "that or the medication's not working" →
+    Part A: X=medication, Y=stool issues (inferred from context) ✅
+    Part B: "or" = alternating hypothesis → speculative ✅ → theory
+  "let's hope it's the HMB" →
+    Part A: X=HMB, Y=weight gain ✅
+    Part B: "let's hope" = hope, NOT speculation → HARD STOP → OMIT
+  "I don't understand how my heart rate is so low" →
+    Part A: no X identified → OMIT
+  "HRV has reached the bottom" →
+    Part A: only HRV described, no cause → OMIT
+  "we knew that was inflated" →
+    Part B: stated as known fact, no speculative language → OMIT
+
+- DEVICE METRIC RULE:
+  HRV, heart rate, SpO2, sleep score = device-tracked. The device pipeline already
+  has this data as fact.
+
+  Ask: what is the theory ABOUT?
+
+  If the theory is about the device metric itself → OMIT:
+  "HRV has reached bottom" → about HRV → OMIT ❌
+  "heart rate never recovered" → about heart rate → OMIT ❌
+  "HRV was previously inflated" → about HRV → OMIT ❌
+
+  If the theory is about an intake, intervention, or activity — and HRV/heart rate
+  appears only as the observed effect → KEEP the theory, it is about the cause:
+  "Tamiflu could be messing with my HRV" → about Tamiflu (intake) → theory ✅
+    raw_text: "Tamiflu could be affecting body response/recovery" (omit HRV reference)
+  "maybe the peptide is affecting my heart rate" → about the peptide (intake) → theory ✅
+    raw_text: "peptide may be affecting physiological response" (omit heart rate reference)
+  "new medication could be affecting HRV" → about the medication → theory ✅
+    raw_text: "new medication could be affecting physiological recovery"
+
+  The key distinction:
+  - Device metric as SUBJECT of the theory → OMIT
+  - Device metric as EVIDENCE of the theory's effect → KEEP, but strip metric from raw_text
+
+  When keeping: raw_text must describe the causal claim without naming the device metric.
+  Use neutral language: "physiological response", "recovery", "body response" instead of
+  "HRV" or "heart rate".
+
 - Is this logistical planning, scheduling, or procurement? → If yes: outside, not theory
   "I'm thinking of going to Tokyo for a blood test", "should I see the dermatologist",
   "I need to find a clinic" → operational/procurement → outside
@@ -788,11 +1016,13 @@ Thinking:
 - scaleY broken → own body? no, equipment issue → outside
 - supplementA, supplementB → happened? yes. specific? yes → intake, explicit_today
 - "going to do activityC" → happened? no, future plan → omit
-- "HRV been better, maybe machineX affecting it" → no specific number, user speculation → theory
+- "HRV been better, maybe machineX affecting it" →
+  Causal claim test: "user claims machineX might cause HRV improvement" → sentence completes.
+  BUT: HRV is device-tracked → device metric rule → OMIT.
 
 Result mentions:
 [conditionA (symptom), symptomB (symptom), machineX (machine),
-scaleY broken (outside), supplementA (intake), supplementB (intake), machineX/HRV theory (theory)]
+scaleY broken (outside), supplementA (intake), supplementB (intake)]
 
 ---
 
@@ -863,13 +1093,13 @@ Thinking:
   Is it recurring and sleep-disrupting? Yes → symptom, explicit_today
 - "did not sleep well, kept waking up cold" → sleep difficulty, never a symptom → omit
 - "splitting headache this morning" → named, specific, independent clinical finding → symptom
-- "elevated heart rate" → observable body state, clinically documentable → symptom
+- "elevated heart rate" → device-tracked metric → OMIT (STEP 2 device metric hard stop)
 - "gas all night, still worse in the morning" → specific, clinically named,
   independent of any activity → symptom
 
 Result mentions:
-[cold plunge (activity), shivering (symptom), headache (symptom),
-elevated heart rate (symptom), gas (symptom)]
+[cold plunge (activity), shivering (symptom), headache (symptom), gas (symptom)]
+"elevated heart rate" → omitted (device metric, never a symptom)
 
 ---
 
@@ -895,15 +1125,15 @@ Thinking:
   reasoning: "Sleep difficulty observation. Never a symptom in this system. Omitting."
 - "splitting headache this morning" → named, specific, independent clinical finding → symptom
   reasoning: "Named condition. Clinically documentable. Not dismissed. Keeping."
-- "elevated heart rate" → observable body state, clinically documentable → symptom
-  reasoning: "Observable clinical finding. Not dismissed. Keeping."
+- "elevated heart rate" → STEP 2 device metric hard stop → OMIT
+  reasoning: "Heart rate is device-tracked. Never a symptom regardless of context. Omitting."
 - "gas all night, still worse in the morning" → specific, clinically named,
   independent of any activity → symptom
   reasoning: "Named clinical finding, ongoing. Not dismissed. Keeping."
 
 Result mentions:
-[cold plunge (activity), shivering (symptom), headache (symptom),
-elevated heart rate (symptom), gas (symptom)]
+[cold plunge (activity), shivering (symptom), headache (symptom), gas (symptom)]
+"elevated heart rate" → omitted (device metric)
 
 ---
 
@@ -933,7 +1163,7 @@ Result mentions:
 
 ---
 
-EXAMPLE 6 — vague group labels, specific vs unresolvable intake
+EXAMPLE 6 — vague group labels, specific vs unresolvable intake, multi-dose splitting
 Transcript:
 "Did not take the lunch supplements today. All other supplements were taken.
 Oh actually no HMB today — I took the morning one but definitely did not get
@@ -945,17 +1175,51 @@ Thinking:
   Even though the user explicitly says did_not_take → omit entirely.
 - "all other supplements were taken" → intake? No specific name → omit entirely.
   Cannot create an entity without knowing what substance it refers to.
-- HMB morning → specific named substance, took → intake, explicit_today
-- HMB dinner → specific named substance, did_not_take → intake, explicit_today
+- HMB morning → specific named substance, took → intake, explicit_today, dose_timing: "morning"
+- HMB dinner → specific named substance, did_not_take → intake, explicit_today, dose_timing: "dinner"
 - lunch → meal, explicit_today
 - dinner → meal, explicit_today
 
 Result mentions:
-[HMB morning (intake), HMB dinner (intake), lunch (meal), dinner (meal)]
+[HMB morning (intake, took, dose_timing: morning), HMB dinner (intake, did_not_take, dose_timing: dinner),
+lunch (meal), dinner (meal)]
 
 Key rule: a vague group label is never acceptable as an intake label,
 even when action is did_not_take and even when the user clearly means something real.
 If the substance cannot be named, the entity cannot be tracked — omit it.
+
+---
+
+EXAMPLE 6b — multi-dose splitting: "the other two" and similar plural dose references
+Transcript:
+"Yesterday I forgot my HMB — I always take it in the morning so that never gets
+forgotten, but I mean I forgot the other two. I was out for lunch and then forgot
+to take it when I went to bed."
+
+Thinking:
+- "I always take it in the morning... never gets forgotten" → active_regimen pattern.
+  BUT: this is said in the context of explaining which doses were missed yesterday.
+  The morning dose is implied as taken but via indirect negation — NOT explicit enough
+  to extract as took. Do not extract dolaylı teyitleri.
+- "forgot the other two" → MULTI-DOSE SPLIT RULE:
+  When the user says they missed multiple doses of the same substance,
+  extract each dose as a SEPARATE mention using the time context provided.
+  Here the user says "out for lunch" and "forgot when I went to bed" →
+  two distinct dose slots are identifiable:
+  → HMB lunch dose: did_not_take, explicit_past, event_date: "yesterday", dose_timing: "lunch"
+  → HMB dinner/bedtime dose: did_not_take, explicit_past, event_date: "yesterday", dose_timing: "bedtime"
+
+MULTI-DOSE SPLIT RULE — apply whenever:
+- User says "the other two", "both doses", "neither of them", "all three" etc.
+- AND the substance is specifically named
+- AND time context exists to identify each dose slot (lunch, dinner, bedtime, morning)
+Extract one mention per dose slot. Do NOT collapse into a single mention.
+If time context is missing for some doses → use dose_timing: null for those,
+but still split into separate mentions.
+
+Result mentions:
+[HMB lunch dose (intake, did_not_take, yesterday, dose_timing: lunch),
+ HMB bedtime dose (intake, did_not_take, yesterday, dose_timing: bedtime)]
 
 ---
 

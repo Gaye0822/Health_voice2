@@ -76,8 +76,9 @@ class IntakeEntity(BaseModel):
     action: IntakeAction
     dose: Optional[float] = None
     unit: Optional[str] = None
-    time: Optional[str] = None
-    event_date: Optional[str] = None  # "yesterday", specific date if intake was not today
+    time: Optional[str] = None          # clock time: "9:00 PM", "late", "this morning"
+    dose_timing: Optional[str] = None   # dose slot: "morning", "lunch", "dinner", "bedtime", "night"
+    event_date: Optional[str] = None    # "yesterday", specific date if intake was not today
     category: IntakeCategory
     is_intervention_dose: Optional[bool] = None  # True if this intake is part of a multi-day protocol
     day_of_protocol: Optional[int] = None        # calculated by schema_enforcer; which day of the protocol this intake belongs to
@@ -266,7 +267,7 @@ def get_mention_tool_schema() -> dict:
 
 ENTITY_SCHEMAS = {
     "intake": {
-        "fields": ["label", "action", "dose", "unit", "time", "category", "is_intervention_dose", "day_of_protocol", "notes"],
+        "fields": ["label", "action", "dose", "unit", "time", "dose_timing", "category", "is_intervention_dose", "day_of_protocol", "notes"],
         "actions": ["took", "did_not_take"],
         "categories": ["supplement", "prescription", "OTC", "food"]
     },
