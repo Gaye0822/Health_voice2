@@ -224,6 +224,36 @@ symptom
   - It is a named condition associated with a chronic or recurring health concern
   When in doubt: if the user's phrasing suggests the absence itself is noteworthy → extract.
 
+  SELF-LABELING RULE — apply this before extracting any symptom:
+  If the user themselves cannot name what they experienced →  OMIT.
+  Signals that the user cannot label it:
+  - "I don't know how to put it"
+  - "some kind of reaction"
+  - "I don't know what's going on"
+  - "some weird stuff"
+  - "something happened"
+  - "I don't know what to call it"
+
+  Do NOT invent a clinical label on the user's behalf.
+  A symptom must come from the user's own description, not from LLM inference.
+
+  Similarly, if the user uses informal vague language that could map to multiple
+  clinical concepts → do NOT assign a clinical label. Omit entirely.
+  "freak out" → could be panic, anxiety, dysautonomia, anger — do not label → OMIT
+  "some reaction" → unresolvable → OMIT
+  "weird stuff" → unresolvable → OMIT
+
+  EMBEDDED DETAIL RULE:
+  If a finding appears as a detail or qualifier inside a vague episode description
+  rather than as a standalone clinical complaint → OMIT.
+  Do NOT extract the detail as a symptom when the episode itself was omitted.
+  "during the freak out there were temperature changes" →
+    temperature changes is a detail of an unlabelable episode → OMIT
+  "some weird reaction, felt hot and dizzy" →
+    heat and dizziness are details of an unresolvable episode → OMIT
+  The test: would this finding be reported on its own, without the episode? 
+  If no → OMIT.
+
   CONTEXT-DEPENDENCY TEST — apply this before extracting any symptom:
   Ask: would this finding exist on any other day, in any other context, without the
   specific activity or situation the user just described?
@@ -245,9 +275,24 @@ symptom
   These do NOT qualify:
   - General feelings: "feeling unwell", "feel awful", "feel terrible", "feel garbage"
   - Energy or motivation: "felt groggy", "exhausted", "low energy", "not feeling it"
-  - Sleep difficulty: "hard time sleeping", "woke up early", "tough sleep", "trouble falling asleep"
-    Sleep difficulty is never a symptom in this system — even if it could be labeled insomnia.
+  - Sleep difficulty: "hard time sleeping", "woke up early", "tough sleep", "trouble falling asleep",
+    "wide awake at night", "couldn't sleep", "insomnia", "couldn't fall asleep", "kept awake"
+    Sleep difficulty is NEVER a symptom in this system — this is an ABSOLUTE rule with no exceptions.
+    Even if the user describes it with clinical language like "insomnia", or gives a specific time
+    ("wide awake at 10 PM"), or adds qualifiers ("chemical-like", "not jittery") → OMIT.
     Only device-recorded sleep metrics (HRV, sleep duration, deep sleep) are extracted, as measurements.
+
+    SLEEP DIFFICULTY HARD STOP — label does not matter, phenomenon does:
+    Before assigning symptom to any mention, ask:
+    "Is this fundamentally about the user being awake when they want to sleep,
+    or having difficulty initiating or maintaining sleep?"
+    If yes → OMIT. This is sleep difficulty regardless of the label chosen.
+    "insomnia" → sleep difficulty → OMIT
+    "wakefulness" → sleep difficulty → OMIT
+    "hyperarousal" → sleep difficulty → OMIT
+    "nocturnal alertness" → sleep difficulty → OMIT
+    The label does not change the phenomenon. If the underlying experience
+    is difficulty sleeping → it is never a symptom in this system.
   - Vague discomfort: "flu-adjacent feeling", "under the weather", "a bit off"
   - Anything the user explicitly dismisses: "probably nothing", "just a bit off"
   - Expected after-effects of activities: cold sensation after cold plunge, muscle burn during exercise
@@ -540,23 +585,6 @@ outside
   "Can you check whether Y affects Z?" → outside, operational ✅
   These are requests for external action, not health event recordings.
 
-  MIXED SENTENCE RULE — theory + outside in the same sentence:
-  If a sentence contains BOTH a speculative claim AND a request directed at the team,
-  extract TWO separate mentions — one theory, one outside.
-  Do NOT collapse them into a single theory or a single outside.
-  The speculative part → theory.
-  The directed request part → outside, operational.
-
-  Key signals for the directed request part:
-  "someone can please remind me", "can you check", "please look into",
-  "can someone find out", "let me know if", "can you remind me"
-
-  Example:
-  "I think there's more Boswellia or NAC for post-concussion but someone can please remind me" →
-    theory: "Boswellia or NAC may help with post-concussion recovery" ✅
-    outside: "team reminder requested for post-concussion protocol" ✅
-  Extract both — do not merge into one.
-
   outside is NOT a catch-all or fallback category. Do not use it for:
   - General health feelings or states ("exhaustion pattern", "feeling off")
   - User's speculation about their own body → theory
@@ -596,6 +624,34 @@ outside
 
   Do NOT omit device issues just because they are not about the user's body.
   That is exactly why they are outside — they are about the external world.
+
+  TEAM ACTION ITEMS — always extract as outside, subtype: operational:
+  When the user uses "we need to", "we should", "we have to", "we must"
+  directed at a collective that includes someone other than themselves —
+  this is a team action item, not a health event.
+
+  Extract as outside even when the subject matter is the user's own health.
+  The key distinction: the user is not recording a health event, they are
+  assigning a task or making a plan for others to act on.
+
+  Examples:
+  "we need to complete the testing on the inhalation device" → outside, operational ✅
+  "we need to figure out a way to repair my microbiome" → outside, operational ✅
+  "we really need to read into the mechanisms of the PEMF device" → outside, operational ✅
+  "we should keep routine testing" → outside, operational ✅
+
+  Do NOT omit these — they are explicit team directives and have operational value.
+  Do NOT extract as theory — there is no speculative claim, only a directive.
+  Do NOT extract as context — they are not explaining another entity.
+
+  IMPORTANT: A team action item and a theory can coexist in the same sentence
+  or adjacent sentences. Extract both separately.
+  "my stool is a mess — could be the microbiome — we need to fix this" →
+    theory: microbiome → stool issues ✅
+    outside: microbiome repair directive ✅
+  Do NOT let the action item cause you to skip the adjacent theory.
+  Always scan the full surrounding context for speculative language even when
+  a team directive is present.
 
 context
   Background information necessary to understand another entity in this note.
@@ -647,20 +703,6 @@ explicit_past    — happened on a specific named past day, not today
                    "Last night" as part of today's report (e.g. sleep last night) may still
                    be explicit_today if the user is describing a device-tracked overnight period
                    that is part of today's health session. Use judgment based on context.
-
-                   CONTEXTUAL DATE REFERENCE RULE:
-                   Phrases like "the same day", "that day", "that same day", "that evening"
-                   refer to a previously mentioned day — not today.
-                   Look back in the transcript for the temporal anchor and use that day.
-                   "didn't have nocturia last night... had an IV the same day" →
-                     "last night" = yesterday → IV event_date_label: "yesterday" ✅
-                   "I did X on Monday... the same day I also took Y" →
-                     event_date_label: "Monday" ✅
-                   Do NOT write "the same day" as event_date_label — resolve it to the
-                   actual anchor day from context.
-                   If the anchor day cannot be clearly identified from context →
-                   default to event_date_label: "yesterday" since "the same day"
-                   always refers to a past day, never today.
 
                    RETRACTION / COMPARISON EXCEPTION:
                    "yesterday" does not always mean the event happened yesterday.
@@ -733,15 +775,6 @@ If eliminated → note why and continue to next step.
 STEP 2 — ELIMINATE symptom:
 Answer all:
 - Is this general energy, fatigue, weakness, or sleep difficulty? → If yes: OMIT
-- Is this a device-tracked metric — heart rate, HRV, SpO2, sleep score, recovery score?
-  → If yes: OMIT. These are NEVER symptoms, regardless of how clinical they sound.
-  HARD STOP — no exceptions:
-  "heart rate elevated" → device metric → OMIT ❌
-  "heart rate never recovered" → device metric → OMIT ❌
-  "HRV is down" → device metric → OMIT ❌
-  "SpO2 low" → device metric → OMIT ❌
-  The device pipeline already has this data. A note-derived symptom creates a
-  competing weaker version — do not extract.
 - Did the user explicitly dismiss this? → If yes: OMIT
 - Is this an expected after-effect of an activity? → If yes: OMIT (activity notes)
 - Is the user using causal or explanatory language rather than reporting a finding?
@@ -768,6 +801,19 @@ STEP 3 — ELIMINATE theory:
   "I don't understand what's going on" → confusion → OMIT
   "God knows", "who knows" → emotional reaction → OMIT
 
+- CONTEXTUAL REFERENCE RULE FOR THEORIES:
+  When the user uses "that", "it", "this", or similar pronouns in a speculative sentence,
+  look back in the transcript to identify what the pronoun refers to.
+  Do NOT omit a theory just because the cause (X) is a pronoun — resolve it first.
+
+  "I thought maybe that was hurting when I sleep" →
+    "that" = previously mentioned activity (e.g. late afternoon lifting) →
+    X = late lifting, Y = sleep disruption → theory ✅
+
+  Always scan the surrounding 2-3 sentences for the pronoun's referent before
+  concluding that X is missing. If the referent is identifiable → extract the theory.
+  If the referent genuinely cannot be resolved → OMIT.
+
 - MANDATORY CAUSAL CLAIM TEST — before extracting any theory, verify TWO things:
 
   PART A — Two distinct entities required:
@@ -788,43 +834,12 @@ STEP 3 — ELIMINATE theory:
 
   PART B — Must be user's own speculative language:
   The user must use hedging/speculative words: "maybe", "could be", "I think", "probably",
-  "I don't know if", "might be", "I guess", "I wonder if", "seems like", "appears to".
+  "I don't know if", "might be", "I guess", "I wonder if".
   Factual statements, past observations, and retrospective summaries are NOT theories
   even if they describe something uncertain.
   "we knew that was inflated" → stated as known fact → OMIT
   "it seems to have reached the bottom" → observation, no speculation → OMIT
   "maybe the peptide is causing this" → explicit speculation ✅
-
-  ALTERNATING HYPOTHESIS RULE:
-  When the user presents two or more alternative explanations using "or", "either/or",
-  "that or", "maybe X or maybe Y" → this IS speculative language. Extract as theory.
-  The user is explicitly weighing competing hypotheses about their own body.
-  Do NOT omit just because the sentence is complex or references a prior clause.
-
-  SINGLE MENTION RULE for alternatives:
-  If the user lists multiple alternative CAUSES for the same EFFECT using "or" →
-  extract ONE mention, not multiple. The raw_mention should capture all alternatives.
-  "Boswellia or NAC for post-concussion" → ONE theory mention (both alternatives, same effect) ✅
-  "second bug or medication not working" → ONE theory mention (both alternatives, same stool issue) ✅
-  Do NOT split into separate mentions when X1 or X2 → same Y.
-  Only split when the alternatives have clearly different effects or topics.
-
-  CONTEXTUAL REFERENCE RULE:
-  When the user uses "that or X" or "either that or X" — "that" refers to something
-  previously mentioned. Look at the surrounding sentences to identify what "that" means.
-  Do NOT omit just because X alone seems incomplete — the full theory is X vs "that".
-  "there's gotta be something else... that or the medication's not working" →
-    "that" = second infection, medication = alternative cause → theory about stool issues ✅
-    X=second infection OR medication, Y=stool problems → extract as theory
-  "I don't know if it's X or that" → same pattern, look back for "that" → theory ✅
-
-  SELF-DISMISSAL EXCEPTION:
-  If the user says "maybe it's psychological" alongside another causal claim, this does
-  NOT eliminate the theory — it is part of the speculation. The user is offering
-  "psychological" as one alternative hypothesis. Extract the full speculation including
-  both alternatives.
-  "maybe it's psychological but it seems like the nuts are hurting my stomach" →
-    two alternative hypotheses → theory ✅ (do not dismiss because of "psychological")
 
   If BOTH parts pass → extract as theory.
   If EITHER part fails → OMIT.
@@ -833,15 +848,8 @@ STEP 3 — ELIMINATE theory:
   "new peptides could be that with what they do to the kidneys" →
     Part A: X=peptides, Y=nocturia (two entities) ✅
     Part B: "could be" = speculative language ✅ → theory
-  "maybe it's psychological but it seems like the nuts in the fiber are hurting my stomach" →
-    Part A: X=nuts/fiber, Y=stomach pain ✅
-    Part B: "maybe", "seems like" = speculative language ✅
-    "maybe it's psychological" = alternative hypothesis, not dismissal ✅ → theory
-  "that or the medication's not working" →
-    Part A: X=medication, Y=stool issues (inferred from context) ✅
-    Part B: "or" = alternating hypothesis → speculative ✅ → theory
   "let's hope it's the HMB" →
-    Part A: X=HMB, Y=weight gain ✅
+    Part A: X=HMB, Y=weight gain (two entities) ✅
     Part B: "let's hope" = hope, NOT speculation → HARD STOP → OMIT
   "I don't understand how my heart rate is so low" →
     Part A: no X identified → OMIT
@@ -849,34 +857,22 @@ STEP 3 — ELIMINATE theory:
     Part A: only HRV described, no cause → OMIT
   "we knew that was inflated" →
     Part B: stated as known fact, no speculative language → OMIT
+  "PEMF is the most powerful thing I've done this year" →
+    Part B: superlative evaluation, no speculative language, no causal claim → OMIT
+  "this is the best protocol I've tried" →
+    Part B: evaluation/ranking, not speculation → OMIT
 
 - DEVICE METRIC RULE:
   HRV, heart rate, SpO2, sleep score = device-tracked. The device pipeline already
-  has this data as fact.
+  has this data as fact. Do NOT extract theories that are ONLY about these metrics.
+  "HRV has reached bottom" → device observation → OMIT ❌
+  "new medication could be affecting HRV and heart rate" → device metrics only → OMIT ❌
 
-  Ask: what is the theory ABOUT?
-
-  If the theory is about the device metric itself → OMIT:
-  "HRV has reached bottom" → about HRV → OMIT ❌
-  "heart rate never recovered" → about heart rate → OMIT ❌
-  "HRV was previously inflated" → about HRV → OMIT ❌
-
-  If the theory is about an intake, intervention, or activity — and HRV/heart rate
-  appears only as the observed effect → KEEP the theory, it is about the cause:
-  "Tamiflu could be messing with my HRV" → about Tamiflu (intake) → theory ✅
-    raw_text: "Tamiflu could be affecting body response/recovery" (omit HRV reference)
-  "maybe the peptide is affecting my heart rate" → about the peptide (intake) → theory ✅
-    raw_text: "peptide may be affecting physiological response" (omit heart rate reference)
-  "new medication could be affecting HRV" → about the medication → theory ✅
-    raw_text: "new medication could be affecting physiological recovery"
-
-  The key distinction:
-  - Device metric as SUBJECT of the theory → OMIT
-  - Device metric as EVIDENCE of the theory's effect → KEEP, but strip metric from raw_text
-
-  When keeping: raw_text must describe the causal claim without naming the device metric.
-  Use neutral language: "physiological response", "recovery", "body response" instead of
-  "HRV" or "heart rate".
+  EXCEPTION — causal speculation that INCLUDES device metrics but is really about
+  a non-device phenomenon may still be extracted:
+  "new peptides could be causing nocturia through kidney effects" → about nocturia (non-device) ✅
+  Keep the theory, but do NOT include HRV/heart rate in the raw_text if they appear
+  only as supporting evidence alongside the real claim.
 
 - Is this logistical planning, scheduling, or procurement? → If yes: outside, not theory
   "I'm thinking of going to Tokyo for a blood test", "should I see the dermatologist",
@@ -1093,13 +1089,13 @@ Thinking:
   Is it recurring and sleep-disrupting? Yes → symptom, explicit_today
 - "did not sleep well, kept waking up cold" → sleep difficulty, never a symptom → omit
 - "splitting headache this morning" → named, specific, independent clinical finding → symptom
-- "elevated heart rate" → device-tracked metric → OMIT (STEP 2 device metric hard stop)
+- "elevated heart rate" → observable body state, clinically documentable → symptom
 - "gas all night, still worse in the morning" → specific, clinically named,
   independent of any activity → symptom
 
 Result mentions:
-[cold plunge (activity), shivering (symptom), headache (symptom), gas (symptom)]
-"elevated heart rate" → omitted (device metric, never a symptom)
+[cold plunge (activity), shivering (symptom), headache (symptom),
+elevated heart rate (symptom), gas (symptom)]
 
 ---
 
@@ -1125,15 +1121,15 @@ Thinking:
   reasoning: "Sleep difficulty observation. Never a symptom in this system. Omitting."
 - "splitting headache this morning" → named, specific, independent clinical finding → symptom
   reasoning: "Named condition. Clinically documentable. Not dismissed. Keeping."
-- "elevated heart rate" → STEP 2 device metric hard stop → OMIT
-  reasoning: "Heart rate is device-tracked. Never a symptom regardless of context. Omitting."
+- "elevated heart rate" → observable body state, clinically documentable → symptom
+  reasoning: "Observable clinical finding. Not dismissed. Keeping."
 - "gas all night, still worse in the morning" → specific, clinically named,
   independent of any activity → symptom
   reasoning: "Named clinical finding, ongoing. Not dismissed. Keeping."
 
 Result mentions:
-[cold plunge (activity), shivering (symptom), headache (symptom), gas (symptom)]
-"elevated heart rate" → omitted (device metric)
+[cold plunge (activity), shivering (symptom), headache (symptom),
+elevated heart rate (symptom), gas (symptom)]
 
 ---
 

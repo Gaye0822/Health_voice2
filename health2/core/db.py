@@ -333,9 +333,8 @@ def save_entities(entities: list, transcript_id: int, mentions: list = None, not
     Save entities to DB.
     If an entity is marked unverified (low confidence mention or label not in KB),
     saves with unverified=True and adds to unverified_entities queue.
-    note_date: the actual date of the voice note.
-    entity_date: the actual date the event occurred (may differ from note_date
-    if event_date is "yesterday" etc — calculated by schema_enforcer).
+    note_date: the actual date of the voice note — written to each entity row for
+    time-based querying (e.g. recurring symptom detection).
     """
     conn = get_db_connection()
     cur = conn.cursor()
@@ -392,9 +391,9 @@ def save_entities(entities: list, transcript_id: int, mentions: list = None, not
                             break
                     print(f"⚙️  unverified: '{raw_mention}' → '{label}' (inferred, not in mishearings)")
 
-        # For intake, machine, and outside: if raw_mention differs from label → inferred, flag as unverified
+        # For intake and machine only: if raw_mention differs from label → inferred, flag as unverified
         # Symptom labels are clinical interpretations by LLM — not flagged
-        if not unverified and entity_type in ("intake", "machine", "outside") and raw_mention and raw_mention.lower() != label.lower():
+        if not unverified and entity_type in ("intake", "machine") and raw_mention and raw_mention.lower() != label.lower():
             raw_lower = raw_mention.lower()
             mapped_canonical = kb_mishearing_map.get(raw_lower)
             if mapped_canonical != label.lower():
@@ -418,8 +417,19 @@ def save_entities(entities: list, transcript_id: int, mentions: list = None, not
             if not context:
                 context = mention_info.get("context")
 
-        entity_date = entity.get("entity_date") or note_date
-        print(f"DEBUG save_entities: label={label}, entity_date={entity_date}, note_date={note_date}, entity keys={list(entity.keys())[:8]}")
+        # entity_date: event_date string'ini note_date'e göre gerçek tarihe çevir
+        # Örn: event_date="yesterday" + note_date=2026-04-06 → entity_date=2026-04-05
+        entity_date = note_date  # default: note_date
+        event_date_raw = entity.get("event_date")
+        if event_date_raw and note_date:
+            try:
+                from core.schema_enforcer import _resolve_start_date_to_iso
+                resolved = _resolve_start_date_to_iso(event_date_raw, note_date)
+                if resolved:
+                    entity_date = resolved
+            except Exception:
+                pass
+
         cur.execute(
             """INSERT INTO entities (transcript_id, entity_type, label, attributes, unverified, flag_reason, note_date, entity_date)
                VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
@@ -429,14 +439,14 @@ def save_entities(entities: list, transcript_id: int, mentions: list = None, not
 
         # Recurring detection + fuzzy matching — terminal only, no schema change
         if entity_type == "symptom" and note_date is not None:
-            # 1. Exact recurring check — uses entity_date (actual event date)
+            # 1. Exact recurring check
             cur.execute(
-                """SELECT COUNT(*), MIN(COALESCE(entity_date, note_date)), MAX(COALESCE(entity_date, note_date))
+                """SELECT COUNT(*), MIN(note_date), MAX(note_date)
                    FROM entities
                    WHERE entity_type = 'symptom'
                    AND LOWER(label) = LOWER(%s)
-                   AND COALESCE(entity_date, note_date) >= %s - INTERVAL '7 days'
-                   AND COALESCE(entity_date, note_date) < %s""",
+                   AND note_date >= %s - INTERVAL '7 days'
+                   AND note_date < %s""",
                 (label, note_date, note_date)
             )
             row = cur.fetchone()
@@ -560,8 +570,6 @@ def _get_kb_labels_simple() -> set:
     cur.close()
     conn.close()
     return labels
-
-
 
 
 def save_normalize_flags(transcript_id: int, applied_corrections: list, entities: list):
@@ -926,27 +934,19 @@ def get_symptom_fuzzy_matches(symptom_labels: list, note_date=None, days_back: i
 
     return results
 
-
 def get_symptom_recurring_info(symptom_labels: list, note_date=None, days_back: int = 7) -> dict:
     """
     For a list of symptom labels, check how many times each appeared in the DB
-    over the past N days. Matching uses both:
-      1. Body part guard — labels must share at least one anatomical token
-      2. Fuzzy score >= 80% — string similarity threshold
-    Both conditions must pass for a DB label to count as the same symptom.
-    Exact match always passes both conditions.
-    Returns dict: label → {frequency, first_seen, last_seen, dates, matched_labels}
-    Read-only — used for recurring enrichment, no writes.
+    over the past N days (exact label match + fuzzy match with body part guard).
+    Returns dict: label → {frequency_7d, first_seen, last_seen, dates, matched_labels}
+    Read-only — used for recurring enrichment before UI review, no writes.
     """
     if not symptom_labels:
         return {}
 
     from datetime import date, timedelta
     from rapidfuzz import fuzz
-    today = note_date or date.today()
-    cutoff = today - timedelta(days=days_back)
 
-    # Anatomical body part tokens — same set as fuzzy matching
     BODY_PARTS = {
         "eye", "eyelid", "gland", "vision", "jaw", "face",
         "knee", "elbow", "shoulder", "hip", "ankle", "foot", "toe",
@@ -961,35 +961,30 @@ def get_symptom_recurring_info(symptom_labels: list, note_date=None, days_back: 
     def _body_tokens(s):
         return {w for w in s.lower().split() if w in BODY_PARTS}
 
-    def _is_same_symptom(a, b):
-        """Returns True if both guard and fuzzy score >= 80 pass."""
-        if a.lower() == b.lower():
-            return True  # exact match always passes
-        # Guard: shared anatomical token required
-        if not (_body_tokens(a) & _body_tokens(b)):
+    def _similar_enough(a, b):
+        shared = _body_tokens(a) & _body_tokens(b)
+        if not shared:
             return False
-        # Fuzzy: weighted combination >= 80
-        score = round(
-            fuzz.partial_ratio(a.lower(), b.lower()) * 0.4 +
-            fuzz.token_sort_ratio(a.lower(), b.lower()) * 0.6, 1
-        )
-        return score >= 80
+        pr = fuzz.partial_ratio(a.lower(), b.lower())
+        tsr = fuzz.token_sort_ratio(a.lower(), b.lower())
+        return round((pr * 0.4 + tsr * 0.6), 1) >= 80
+
+    today = note_date or date.today()
+    cutoff = today - timedelta(days=days_back)
 
     conn = get_db_connection()
     cur = conn.cursor()
 
-    # Fetch all distinct symptom labels + dates from past N days
-    # Uses entity_date (actual event date) not note_date (recording date)
     cur.execute(
-        """SELECT label, COALESCE(entity_date, note_date) as effective_date FROM entities
+        """SELECT label, note_date FROM entities
            WHERE entity_type = 'symptom'
-           AND COALESCE(entity_date, note_date) IS NOT NULL
-           AND COALESCE(entity_date, note_date) >= %s
-           AND COALESCE(entity_date, note_date) < %s
-           ORDER BY COALESCE(entity_date, note_date) ASC""",
+           AND note_date IS NOT NULL
+           AND note_date >= %s
+           AND note_date < %s
+           ORDER BY note_date ASC""",
         (cutoff, today)
     )
-    all_rows = cur.fetchall()
+    db_rows = cur.fetchall()
     cur.close()
     conn.close()
 
@@ -998,10 +993,12 @@ def get_symptom_recurring_info(symptom_labels: list, note_date=None, days_back: 
         matched_dates = []
         matched_labels = set()
 
-        for db_label, db_date in all_rows:
-            if _is_same_symptom(label, db_label):
+        for db_label, db_date in db_rows:
+            is_exact = db_label.lower() == label.lower()
+            is_fuzzy = (not is_exact) and _similar_enough(label, db_label)
+            if is_exact or is_fuzzy:
                 matched_dates.append(db_date)
-                if db_label.lower() != label.lower():
+                if is_fuzzy:
                     matched_labels.add(db_label)
 
         if matched_dates:
@@ -1011,7 +1008,7 @@ def get_symptom_recurring_info(symptom_labels: list, note_date=None, days_back: 
                 "first_seen": str(matched_dates[0]),
                 "last_seen": str(matched_dates[-1]),
                 "dates": [str(d) for d in matched_dates],
-                "matched_labels": list(matched_labels)  # fuzzy-matched variants
+                "matched_labels": list(matched_labels)
             }
         else:
             results[label] = None

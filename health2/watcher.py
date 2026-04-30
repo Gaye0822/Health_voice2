@@ -3,7 +3,9 @@ watcher.py — Audio file watcher for the health voice pipeline.
 
 Monitors ~/AudioProcessing for new audio files dropped by icloud_watcher.py.
 When a new file is detected, runs the full pipeline:
-  transcribe → normalize → mention → structure → validate → save to DB
+  transcribe → normalize → mention → pipeline (structure + schema + intervention + validate) → save to DB
+
+All entities are saved with verified=False — Gabriel reviews them via the app.
 
 Usage:
   python watcher.py
@@ -44,15 +46,27 @@ def log(msg: str):
 
 
 # ── Pipeline imports ───────────────────────────────────────────────────────────
-# Add project root to path so imports work regardless of cwd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.transcribe import transcribe_audio
 from core.normalize import normalize_transcript
 from core.mention import extract_mentions
-from core.structure import structure_mentions
-from core.validate import validate_entities
+from core.pipeline import run_pipeline
 from core.db import save_transcript, save_entities
+
+
+# ── Note date extraction ───────────────────────────────────────────────────────
+
+def extract_note_date(filepath: str):
+    """
+    Extract the note date from the file's modification timestamp.
+    Returns a date object, or None on failure.
+    """
+    try:
+        ts = os.path.getmtime(filepath)
+        return datetime.fromtimestamp(ts).date()
+    except Exception:
+        return None
 
 
 # ── Core pipeline ──────────────────────────────────────────────────────────────
@@ -60,7 +74,7 @@ from core.db import save_transcript, save_entities
 def process_audio_file(filepath: str):
     """
     Run the full health voice pipeline on a single audio file.
-    Saves transcript and entities to the database.
+    Saves transcript and entities to the database (verified=False).
     Archives the processed file to ~/AudioProcessing/processed/
     """
     fname = os.path.basename(filepath)
@@ -68,42 +82,50 @@ def process_audio_file(filepath: str):
 
     try:
         # Stage 1 — Transcribe
-        log(f"[1/6] Transcribing {fname}...")
+        log(f"[1/5] Transcribing {fname}...")
         raw = transcribe_audio(filepath)
-        log(f"[1/6] Transcript: {raw[:80]}...")
+        log(f"[1/5] Transcript: {raw[:80]}...")
 
         # Stage 2 — Normalize
-        log(f"[2/6] Normalizing...")
+        log(f"[2/5] Normalizing...")
         result = normalize_transcript(raw)
         normalized = result["normalized_text"]
         low_conf = result.get("low_confidence_segments", [])
         if low_conf:
-            log(f"[2/6] {len(low_conf)} low-confidence segment(s) flagged")
+            log(f"[2/5] {len(low_conf)} low-confidence segment(s) flagged — continuing")
 
         # Stage 3 — Save transcript to DB
-        log(f"[3/6] Saving transcript to DB...")
-        transcript_id = save_transcript(raw, normalized, "voice_note_auto")
-        log(f"[3/6] Transcript ID: {transcript_id}")
+        note_date = extract_note_date(filepath)
+        log(f"[3/5] Saving transcript to DB... (note_date={note_date})")
+        transcript_id = save_transcript(raw, normalized, "voice_note_auto", note_date=note_date)
+        log(f"[3/5] Transcript ID: {transcript_id}")
 
         # Stage 4 — Extract mentions
-        log(f"[4/6] Extracting mentions...")
+        log(f"[4/5] Extracting mentions...")
         mentions = extract_mentions(normalized)
-        log(f"[4/6] {len(mentions)} mention(s) found")
+        log(f"[4/5] {len(mentions)} mention(s) found")
 
-        # Stage 5 — Structure
-        log(f"[5/6] Structuring entities...")
-        entities = structure_mentions(mentions, normalized)
-        log(f"[5/6] {len(entities)} entity(ies) structured")
+        # Stage 5 — Full pipeline (structure + schema + intervention + validate)
+        log(f"[5/5] Running pipeline...")
+        pipeline_result = run_pipeline(mentions, normalized, note_date=note_date)
+        entities = pipeline_result["entities"]
+        validation_changes = pipeline_result["validation_changes"]
+        enforcer_violations = pipeline_result["enforcer_violations"]
 
-        # Stage 6 — Validate + Save
-        log(f"[6/6] Validating and saving...")
-        entities, changes = validate_entities(entities, normalized)
-        save_entities(entities, transcript_id)
+        log(f"[5/5] {len(entities)} entity(ies) structured")
 
-        log(f"[DONE] {fname} → transcript_id={transcript_id}, {len(entities)} entities saved")
-        if changes:
-            for change in changes:
+        if enforcer_violations:
+            for v in enforcer_violations:
+                log(f"       schema_enforcer: {v}")
+
+        if validation_changes:
+            for change in validation_changes:
                 log(f"       validator: {change}")
+
+        # Save — all entities saved with verified=False (watcher mode)
+        save_entities(entities, transcript_id, mentions, note_date=note_date)
+
+        log(f"[DONE] {fname} → transcript_id={transcript_id}, {len(entities)} entities saved (unverified)")
 
         # Archive processed file
         dst = os.path.join(PROCESSED_DIR, fname)

@@ -490,15 +490,17 @@ MEASUREMENT VALUE RULE:
 - NEVER omit a measurement just because no number exists — preserve it with value: null
 
 THEORY LINKED_TO RULE:
-- Always try to fill linked_to_label and linked_to_type.
+- Only fill linked_to_label if the theory clearly and directly refers to a specific
+  entity that exists in this note. Do NOT force a match.
 - linked_to must be semantically related to what the theory is ABOUT — not the nearest
   entity in the transcript. Proximity is not the criterion; semantic relevance is.
-- Ask: "What is the user's speculation actually about?" → link to that entity.
-- If the theory is about a symptom → link to that symptom.
-- If the theory is about a substance or activity → link to that intake or activity.
+- Ask: "What is the user's speculation actually about?" → link to that entity only if
+  it exists in this note as an extracted entity.
+- If the theory is about a symptom that was extracted → link to that symptom.
+- If the theory is about a substance or activity that was extracted → link to that entity.
 - NEVER link a theory to an entity just because it appeared nearby in the transcript.
-- Only leave linked_to_label null if the theory genuinely cannot be connected to
-  any specific entity in this note.
+- If the theory refers to something vague, unnamed, or not present as an entity in this
+  note → leave linked_to_label: null. Do NOT invent a link.
 - Examples:
   "maybe the cold plunge affected my HRV" → the theory is ABOUT cold plunge →
     linked_to_label: "cold plunge", linked_to_type: "activity" ✅
@@ -506,9 +508,9 @@ THEORY LINKED_TO RULE:
     the theory is ABOUT Demodex/blepharitis pattern →
     linked_to_label: "blepharitis", linked_to_type: "symptom" ✅
     NOT linked to "joint swelling" just because it appeared earlier ❌
-  "I don't know what's going on with my stomach" → theory is about stomach/gut →
-    linked_to_label: "stool consistency", linked_to_type: "symptom" ✅
-  "I don't know, life sucks" → linked_to_label: null (genuinely unconnected)
+  "I don't know if this is related to the intestinal stuff" → vague connection,
+    no clear entity match → linked_to_label: null ✅
+  "I don't know, life sucks" → linked_to_label: null (genuinely unconnected) ✅
 
 THEORY MERGE RULE:
 - Merge ONLY when two theories are speculating about the exact same thing in the same direction.
@@ -573,7 +575,23 @@ RAW_TEXT FIELD (outside, context, theory):
   The raw_text should sound like the user, not like a medical summary.
   Minimize paraphrasing — preserve the user's own words and phrasing.
   It is acceptable to lightly trim for length, but the voice must remain the user's.
+
+  SELF-CONTAINED RULE — raw_text must make sense on its own:
+  A reader looking only at raw_text must be able to understand:
+  - What the user thinks might be causing something (X)
+  - What they think it might be causing (Y)
+  If either X or Y is missing from raw_text, the theory is unreadable in isolation.
+  Always reconstruct the full X → Y claim even if the user's words were fragmented
+  or spread across sentences.
+  Strip emotional filler words ("God knows", "who knows", "I don't know what to say")
+  that add no meaning — but keep the speculative claim itself in the user's voice.
+
   Examples:
+  User says: "I don't know that's related to the intestinal stuff God knows"
+  (context: muscle loss and weight gain when adding calories)
+  → raw_text: "muscle loss and abnormal weight gain when adding calories could be related to intestinal issues" ✅
+  → NOT: "that's related to the intestinal stuff God knows" ❌ (fragmented, filler intact, no X or Y)
+
   User says: "no normal human being gets a Demodex infection every six months, it's always around viral or bacterial infection, something is very wrong with the broader system"
   → raw_text: "no normal human being gets Demodex every six months — always around infection — something very wrong with the system" ✅
   → NOT: "recurring Demodex infection pattern indicates underlying immune dysfunction" ❌ (LLM interpretation)

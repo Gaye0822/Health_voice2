@@ -6,11 +6,7 @@ from dotenv import load_dotenv
 from core.transcribe import transcribe_audio
 from core.normalize import normalize_transcript
 from core.mention import extract_mentions
-from core.structure import structure_mentions
-from core.validate import validate_entities
-from core.schema_enforcer import enforce_schema
-from core.intervention_pipeline import run_intervention_pipeline
-from core.intervention_merger import merge_intervention_entities
+from core.pipeline import run_pipeline
 from core.db import (
     save_transcript,
     save_entities,
@@ -244,7 +240,7 @@ elif st.session_state.step == "review_transcript":
                                 st.toast(f"✅ Applied: '{original}' → '{custom}'")
                                 st.rerun()
 
-                # NEW: Flag for Gabriel audio review
+                # Flag for Gabriel audio review
                 with col4:
                     already_flagged = any(
                         f["original"] == original for f in st.session_state.pending_flags
@@ -469,11 +465,10 @@ elif st.session_state.step == "review_mentions":
                         example_before={"candidate_type": original_type, "raw_mention": raw}
                     )
 
-            # YENİ
             for updated in updated_mentions:
                 raw = updated.get("raw_mention", "")
                 new_type = updated.get("candidate_type", "other")
-                original_type = updated.pop("_original_type", new_type)  # UI'da gösterilen type
+                original_type = updated.pop("_original_type", new_type)
                 if new_type != original_type:
                     save_knowledge(
                         original_text=raw,
@@ -486,155 +481,24 @@ elif st.session_state.step == "review_mentions":
                     )
                     st.toast(f"✅ Saved: {raw} → {new_type}")
 
-            # ── Split mentions — intervention goes to its own pipeline ──────
-            intervention_mentions = [
-                m for m in updated_mentions if m.get("candidate_type") == "intervention"
-            ]
-            normal_mentions = [
-                m for m in updated_mentions if m.get("candidate_type") != "intervention"
-            ]
-            
-            # ── Normal pipeline ───────────────────────────────────────────
-            with st.spinner("Structuring entities (Stage 2)..."):
-                normal_entities = structure_mentions(normal_mentions, st.session_state.normalized)
-            with st.spinner("Applying schema rules (Stage 2b)..."):
-                note_date = st.session_state.get("note_date")
-                normal_entities, enforcer_violations = enforce_schema(normal_entities, note_date=note_date)
-                if enforcer_violations:
-                    print(f"⚙️  schema_enforcer: {len(enforcer_violations)} violation(s)")
-
-            # Apply event_date BEFORE merge so all downstream stages
-            # see correct event_date. structure.py hint mechanism covers most cases;
-            # this is the backstop for any entity still missing event_date.
-            def _ed_labels_match(raw: str, entity_label: str) -> bool:
-                STOP = {"course", "protocol", "supplement", "dose", "medication", "meal"}
-                ta = {t for t in raw.split() if t not in STOP and len(t) > 2}
-                tb = {t for t in entity_label.split() if t not in STOP and len(t) > 2}
-                if ta & tb:
-                    return True
-                return raw in entity_label or entity_label in raw
-
-            # Build ordered hint list from mentions — same logic as structure.py
-            # to handle multiple mentions with the same label (e.g. HMB lunch / HMB bedtime)
-            EVENT_DATE_TYPES = {"meal", "symptom", "intake", "activity", "machine"}
-
-            # Build ordered hint pool — one entry per mention with useful hints.
-            # Each entry is consumed once so same-label mentions (e.g. 3x HMB)
-            # are matched to different entities rather than all pointing to the first.
-            _hint_pool = []
-            for m in normal_mentions:
-                temporal = m.get("temporal_evidence", "")
-                edl = m.get("event_date_label") if temporal == "explicit_past" else None
-                dt_hint = m.get("_dose_timing_hint")
-                if edl or dt_hint:
-                    _hint_pool.append({
-                        "raw_key": m.get("raw_mention", "").lower(),
-                        "candidate_type": m.get("candidate_type"),
-                        "event_date_hint": edl,
-                        "dose_timing_hint": dt_hint,
-                        "used": False,
-                    })
-
-            for entity in normal_entities:
-                etype = entity.get("type")
-                if etype not in EVENT_DATE_TYPES:
-                    continue
-                label = entity.get("label", "").lower()
-                for hint in _hint_pool:
-                    if hint["used"]:
-                        continue
-                    if hint["candidate_type"] != etype:
-                        continue
-                    if not _ed_labels_match(hint["raw_key"], label):
-                        continue
-                    if hint["event_date_hint"] and not entity.get("event_date"):
-                        entity["event_date"] = hint["event_date_hint"]
-                        print(f"⚙️  app.py event_date ({etype}): '{entity.get('label')}' → '{hint['event_date_hint']}'")
-                    if hint["dose_timing_hint"] and not entity.get("dose_timing"):
-                        entity["dose_timing"] = hint["dose_timing_hint"]
-                        print(f"⚙️  app.py dose_timing ({etype}): '{entity.get('label')}' → '{hint['dose_timing_hint']}'")
-                    hint["used"] = True
-                    break
-
-            # time field'ında tarihsel ifade varsa event_date'e taşı
-            # time field'ında tarihsel ifade varsa event_date'e taşı,
-            # bugünü gösteren ifade varsa event_date'i temizle
-            _DATE_EXPRESSIONS = {
-                "last night", "yesterday", "yesterday morning", "yesterday afternoon",
-                "yesterday evening", "yesterday night", "the night before last",
-                "two days ago", "three days ago", "last week", "last monday",
-                "last tuesday", "last wednesday", "last thursday", "last friday",
-                "last saturday", "last sunday"
-            }
-            _TODAY_TIME_SIGNALS = {
-                "this morning", "this afternoon", "this evening", "tonight",
-                "today", "just now", "right now"
-            }
-            for entity in normal_entities:
-                if entity.get("type") not in EVENT_DATE_TYPES:
-                    continue
-                time_val = (entity.get("time") or "").strip().lower()
-                if time_val in _DATE_EXPRESSIONS:
-                    if not entity.get("event_date"):
-                        entity["event_date"] = time_val
-                        print(f"⚙️  app.py time→event_date: '{entity.get('label')}' '{time_val}' → event_date")
-                    entity["time"] = None
-                elif time_val in _TODAY_TIME_SIGNALS:
-                    if entity.get("event_date"):
-                        print(f"⚙️  app.py today-time override: '{entity.get('label')}' time='{time_val}' → clearing event_date")
-                        entity["event_date"] = None
-                    entity["time"] = None
-            # ── Intake shadow mentions for intervention substances ───────────
-            # Each intervention mention also needs an intake entity in the normal
-            # pipeline so that intervention_merger can find and annotate it.
-            # We create a shallow copy of the mention with candidate_type: "intake".
-            # The original intervention mention still goes to intervention_pipeline
-            # unchanged — this copy is only for structure.py / normal pipeline.
-            #
-            # temporal_evidence is preserved as-is so mention_filter (already run
-            # above) and structure.py can apply their normal logic.
-            # _intervention_shadow=True marks these for logging/debugging.
-            for m in intervention_mentions:
-                int_raw = m.get("raw_mention", "").lower()
-                # Aynı substance için zaten intake mention varsa shadow ekleme
-                already_has_intake = any(
-                    n.get("candidate_type") == "intake" and
-                    _ed_labels_match(n.get("raw_mention", "").lower(), int_raw)
-                    for n in normal_mentions
-                )
-                if already_has_intake:
-                    print(
-                        f"⚙️  app.py [intervention shadow]: '{m.get('raw_mention', '')}' "
-                        f"→ intake mention already exists, skipping shadow"
-                    )
-                    continue
-                shadow = dict(m)
-                shadow["candidate_type"] = "intake"
-                shadow["_intervention_shadow"] = True
-                normal_mentions.append(shadow)
-                print(
-                    f"⚙️  app.py [intervention shadow]: '{m.get('raw_mention', '')}' "
-                    f"→ intake copy added to normal pipeline"
+            # ── Run pipeline ──────────────────────────────────────────────
+            note_date = st.session_state.get("note_date")
+            with st.spinner("Structuring & validating entities..."):
+                pipeline_result = run_pipeline(
+                    updated_mentions,
+                    st.session_state.normalized,
+                    note_date=note_date
                 )
 
+            entities = pipeline_result["entities"]
+            validation_changes = pipeline_result["validation_changes"]
+            enforcer_violations = pipeline_result["enforcer_violations"]
 
-            # ── Intervention pipeline ─────────────────────────────────────
-            with st.spinner("Processing interventions (Stage 2c)..."):
-                intervention_entities = run_intervention_pipeline(
-                    intervention_mentions, st.session_state.normalized,
-                    today_date=st.session_state.get("note_date")
-                )
+            if enforcer_violations:
+                for v in enforcer_violations:
+                    print(f"⚙️  schema_enforcer: {v}")
 
-            # ── Merge ─────────────────────────────────────────────────────
-            with st.spinner("Merging entities (Stage 2d)..."):
-                entities = merge_intervention_entities(
-                    intervention_entities, normal_entities,
-                    today_date=st.session_state.get("note_date")
-                )
-
-            with st.spinner("Validating entities (Stage 3)..."):
-                entities, validation_changes = validate_entities(entities, st.session_state.normalized)
-
+            # ── KB badge check (UI only — not saved to DB) ────────────────
             from core.db import _get_kb_labels_simple
             kb_labels = _get_kb_labels_simple()
 
@@ -656,9 +520,9 @@ elif st.session_state.step == "review_mentions":
                         entity["_not_in_kb"] = True
 
             # ── Recurring symptom enrichment ──────────────────────────────
-            # Deterministik post-processing: her symptom entity'si için
-            # son 7 günde DB'de kaç kez göründüğünü çek, entity'ye ekle.
-            # Test aşaması — yeni alan, extraction kurallarına dokunmuyor.
+            # Validate bittikten sonra, DB'ye yazmadan önce:
+            # her symptom label için son 7 günde kaç kez göründüğünü çek,
+            # entity'ye _recurring olarak ekle — UI'da badge olarak gösterilir.
             symptom_labels_for_recurring = [
                 e.get("label") for e in entities
                 if e.get("type") == "symptom" and e.get("label")
@@ -671,12 +535,10 @@ elif st.session_state.step == "review_mentions":
                     )
                     for entity in entities:
                         if entity.get("type") == "symptom":
-                            label = entity.get("label", "")
-                            info = recurring_info.get(label)
+                            lbl = entity.get("label", "")
+                            info = recurring_info.get(lbl)
                             if info:
                                 entity["_recurring"] = info
-                                print(f"🔁 recurring enriched: '{label}' → {info['frequency_7d']}x in 7d "
-                                      f"(first: {info['first_seen']}, last: {info['last_seen']})")
                 except Exception as e:
                     print(f"⚠️  recurring enrichment error: {e}")
 
@@ -716,7 +578,6 @@ elif st.session_state.step == "review_entities":
                 symptom_labels,
                 note_date=st.session_state.get("note_date")
             )
-
         except Exception as e:
             print(f"⚠️  fuzzy match error: {e}")
 
@@ -747,39 +608,9 @@ elif st.session_state.step == "review_entities":
                         variants = rec.get("matched_labels", [])
                         variant_str = f" · also as: {', '.join(variants)}" if variants else ""
                         st.caption(
-                            f"🔁 Recurring: **{rec['frequency_7d']}x** in past 7 days "
-                            f"· first: {rec['first_seen']} · last: {rec['last_seen']}{variant_str}"
+                            f"🔁 Recurring: **{rec['frequency_7d']}x** in past 7 days"
+                            f" · first: {rec['first_seen']} · last: {rec['last_seen']}{variant_str}"
                         )
-                        # LLM yorum butonu — geçici, test aşaması
-                        btn_key = f"llm_recurring_{label}_{id(entity)}"
-                        if st.button("💬 LLM insight", key=btn_key):
-                            with st.spinner("Generating insight..."):
-                                try:
-                                    import anthropic as _anthropic
-                                    _client = _anthropic.Anthropic()
-                                    _prompt = (
-                                        f"A health tracking system has flagged the following recurring symptom:\n\n"
-                                        f"Symptom: {label}\n"
-                                        f"Occurrences in past 7 days: {rec['frequency_7d']}\n"
-                                        f"First seen: {rec['first_seen']}\n"
-                                        f"Last seen: {rec['last_seen']}\n"
-                                        f"Dates: {', '.join(rec['dates'])}\n"
-                                        + (f"Also recorded as: {', '.join(variants)}\n" if variants else "") +
-                                        f"\nIn 2-3 sentences, briefly comment on this pattern: "
-                                        f"how long it has been active, whether it appears to be worsening, "
-                                        f"stable, or improving, and whether it warrants attention. "
-                                        f"Be factual and concise. Do not give medical advice."
-                                    )
-                                    _resp = _client.messages.create(
-                                        model="claude-sonnet-4-20250514",
-                                        max_tokens=200,
-                                        messages=[{"role": "user", "content": _prompt}]
-                                    )
-                                    _insight = _resp.content[0].text
-                                    st.info(_insight)
-                                except Exception as _e:
-                                    st.warning(f"LLM insight error: {_e}")
-
                 # Fuzzy match results for symptoms
                 if entity_type == "symptom" and label in fuzzy_matches:
                     result = fuzzy_matches[label]
@@ -791,6 +622,8 @@ elif st.session_state.step == "review_entities":
                     if diagnostic:
                         diag_str = " · ".join(f"{m} ({s}% ⚠️)" for m, s, _ in diagnostic)
                         st.caption(f"🔍 No body token match: {diag_str}")
+                if entity.get("entity_date"):
+                    st.caption(f"📅 entity_date: {entity['entity_date']}")
                 st.json(entity)
 
     if meal_entities:
