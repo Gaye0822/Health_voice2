@@ -1,67 +1,114 @@
 #!/bin/bash
-# Health Voice System — Setup Script
-# Run: bash setup.sh
+# setup.sh — Health Voice System setup script
+# Run this once after cloning the repo.
+# Usage: bash setup.sh
 
 set -e
 
-echo "🔧 Health Voice System Setup"
-echo "================================"
-
 echo ""
-echo "1. Checking Python version..."
-python3 --version || { echo "❌ Python3 not found"; exit 1; }
-
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Health Voice System — Setup"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "2. Creating virtual environment..."
-python3 -m venv venv
+
+# ── Check Python ──────────────────────────────────────────────────────────────
+echo "→ Checking Python..."
+if ! command -v python3 &>/dev/null; then
+    echo "  ✗ Python3 not found. Install from https://python.org"
+    exit 1
+fi
+PYTHON_VERSION=$(python3 --version 2>&1)
+echo "  ✓ $PYTHON_VERSION"
+
+# ── Check ffmpeg ──────────────────────────────────────────────────────────────
+echo "→ Checking ffmpeg..."
+if ! command -v ffmpeg &>/dev/null; then
+    echo "  ⚠ ffmpeg not found. Installing via Homebrew..."
+    if command -v brew &>/dev/null; then
+        brew install ffmpeg
+    else
+        echo "  ✗ Homebrew not found. Install ffmpeg manually: https://ffmpeg.org"
+        exit 1
+    fi
+else
+    echo "  ✓ ffmpeg found"
+fi
+
+# ── Virtual environment ───────────────────────────────────────────────────────
+echo "→ Creating virtual environment..."
+if [ ! -d "venv" ]; then
+    python3 -m venv venv
+    echo "  ✓ venv created"
+else
+    echo "  ✓ venv already exists"
+fi
+
 source venv/bin/activate
-echo "✅ venv active"
 
-echo ""
-echo "3. Installing dependencies..."
-pip install --upgrade pip -q
-pip install -r requirements.txt -q
-echo "✅ Dependencies installed"
+# ── Install dependencies ──────────────────────────────────────────────────────
+echo "→ Installing Python dependencies..."
+pip install --quiet --upgrade pip
+pip install --quiet -r requirements.txt
+echo "  ✓ Dependencies installed"
 
-echo ""
-echo "4. Checking .env file..."
+# ── Environment file ──────────────────────────────────────────────────────────
+echo "→ Setting up environment file..."
 if [ ! -f ".env" ]; then
-    echo "⚠️  .env not found — copying .env.example"
     cp .env.example .env
-    echo "❗ Edit .env and fill in your API keys before continuing"
+    echo "  ✓ .env created from .env.example"
+    echo ""
+    echo "  ⚠ ACTION REQUIRED: Open .env and fill in:"
+    echo "    - OPENAI_API_KEY"
+    echo "    - DB_PASSWORD"
+    echo ""
 else
-    echo "✅ .env found"
+    echo "  ✓ .env already exists"
 fi
 
-source .env 2>/dev/null || true
+# ── Database setup ────────────────────────────────────────────────────────────
+echo "→ Setting up database..."
+echo ""
+echo "  Please enter your PostgreSQL superuser name (e.g. your macOS username):"
+read -r SUPERUSER
 
-echo ""
-echo "5. Creating database schema..."
-if [ -z "$DB_NAME" ]; then
-    echo "⚠️  No DB info in .env — skipping"
-    echo "   Run manually: psql -U \$DB_USER -d \$DB_NAME -f schema.sql"
-else
-    PGPASSWORD=$DB_PASSWORD psql -U $DB_USER -h $DB_HOST -p $DB_PORT -d $DB_NAME -f schema.sql && \
-        echo "✅ Schema created" || \
-        echo "⚠️  Schema already exists or connection error"
-fi
+echo "  Creating database user and database..."
 
-echo ""
-echo "6. Loading knowledge base and corrections..."
-if [ -z "$DB_NAME" ]; then
-    echo "⚠️  No DB info in .env — skipping"
-    echo "   Run manually: psql -U \$DB_USER -d \$DB_NAME -f seed_data.sql"
-else
-    PGPASSWORD=$DB_PASSWORD psql -U $DB_USER -h $DB_HOST -p $DB_PORT -d $DB_NAME -f seed_data.sql && \
-        echo "✅ Seed data loaded" || \
-        echo "⚠️  Seed data load failed or already loaded"
-fi
+psql -U "$SUPERUSER" -c "CREATE USER health_user WITH PASSWORD 'health_pass';" 2>/dev/null && \
+    echo "  ✓ User health_user created" || \
+    echo "  ✓ User health_user already exists"
 
+psql -U "$SUPERUSER" -c "CREATE DATABASE health_voice OWNER health_user;" 2>/dev/null && \
+    echo "  ✓ Database health_voice created" || \
+    echo "  ✓ Database health_voice already exists"
+
+psql -U "$SUPERUSER" -c "GRANT ALL PRIVILEGES ON DATABASE health_voice TO health_user;" 2>/dev/null
+
+echo "  Running schema..."
+psql -U "$SUPERUSER" -d health_voice -f schema.sql -q
+psql -U "$SUPERUSER" -d health_voice -c "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO health_user;" -q
+psql -U "$SUPERUSER" -d health_voice -c "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO health_user;" -q
+echo "  ✓ Schema created"
+
+echo "  Seeding knowledge base..."
+psql -U "$SUPERUSER" -d health_voice -f seed_data.sql -q
+echo "  ✓ Knowledge base seeded"
+
+# ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
-echo "================================"
-echo "✅ Setup complete!"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  ✅ Setup complete!"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "To start:"
-echo "  source venv/bin/activate"
-echo "  streamlit run app.py"
+echo "  Next steps:"
+echo ""
+echo "  1. Fill in .env with your API key and DB password"
+echo ""
+echo "  2. Start the Streamlit UI:"
+echo "     source venv/bin/activate"
+echo "     streamlit run app.py"
+echo ""
+echo "  3. Or start the automated watcher:"
+echo "     source venv/bin/activate"
+echo "     python icloud_watcher.py   # Terminal 1"
+echo "     python watcher.py          # Terminal 2"
 echo ""

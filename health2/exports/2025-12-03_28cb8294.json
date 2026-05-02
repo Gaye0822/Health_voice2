@@ -1,0 +1,126 @@
+{
+  "meta": {
+    "warnings": [],
+    "validation_changes": [],
+    "enforcer_violations": []
+  },
+  "layers": {
+    "event_layer": [
+      {
+        "type": "symptom",
+        "label": "stool consistency",
+        "notes": null,
+        "source": null,
+        "status": "present",
+        "duration": null,
+        "interval": null,
+        "severity": null,
+        "warnings": [],
+        "qualifier": "completely effed up, total mess",
+        "recurring": {
+          "dates": [
+            "2025-12-02"
+          ],
+          "last_seen": "2025-12-02",
+          "first_seen": "2025-12-02",
+          "frequency_7d": 1
+        },
+        "event_date": null,
+        "kb_matched": true,
+        "onset_time": null,
+        "entity_date": "2025-12-03"
+      },
+      {
+        "type": "symptom",
+        "label": "gas",
+        "notes": null,
+        "source": null,
+        "status": "present",
+        "duration": null,
+        "interval": null,
+        "severity": null,
+        "warnings": [],
+        "qualifier": "ton of gas",
+        "event_date": "yesterday",
+        "kb_matched": true,
+        "onset_time": null,
+        "entity_date": "2025-12-02"
+      },
+      {
+        "type": "activity",
+        "label": "onsen",
+        "notes": "super long session, felt great before breakfast, ended around 9:45",
+        "status": "completed",
+        "duration": "15 minutes",
+        "warnings": [],
+        "event_date": "yesterday",
+        "kb_matched": true,
+        "start_time": null,
+        "entity_date": "2025-12-02"
+      },
+      {
+        "type": "activity",
+        "label": "cold plunge",
+        "notes": "after onsen session, felt great before breakfast",
+        "status": "completed",
+        "duration": null,
+        "warnings": [],
+        "event_date": "yesterday",
+        "kb_matched": true,
+        "start_time": null,
+        "entity_date": "2025-12-02"
+      }
+    ],
+    "theory_layer": [],
+    "context_layer": [],
+    "outside_bucket": [],
+    "nutrition_layer": [
+      {
+        "time": "6:00 PM",
+        "type": "meal",
+        "label": "dinner",
+        "warnings": [],
+        "eaten_out": true,
+        "event_date": "last night",
+        "kb_matched": true,
+        "restaurant": null,
+        "description": null,
+        "entity_date": "2025-12-02"
+      },
+      {
+        "time": null,
+        "type": "meal",
+        "label": "breakfast",
+        "warnings": [],
+        "eaten_out": null,
+        "event_date": "yesterday",
+        "kb_matched": true,
+        "restaurant": null,
+        "description": null,
+        "entity_date": "2025-12-02"
+      },
+      {
+        "time": "1:15-1:30 PM",
+        "type": "meal",
+        "label": "lunch",
+        "warnings": [],
+        "eaten_out": null,
+        "event_date": "yesterday",
+        "kb_matched": true,
+        "restaurant": null,
+        "description": null,
+        "entity_date": "2025-12-02"
+      }
+    ]
+  },
+  "envelope": {
+    "note_date": "2025-12-03",
+    "audio_file": null,
+    "created_at": "2026-05-01T14:16:26Z",
+    "source_note_id": "28cb8294-4bba-40fe-a793-b3d0d29e5431",
+    "extraction_model": "claude-sonnet-4-20250514",
+    "pipeline_version": "1.0.0",
+    "transcription_model": "whisper-1",
+    "normalized_transcript": "Don't know if I'm getting sick or I didn't sleep well because I get a late last night and it's only I didn't even start eating it took forever I started eating at six and it was a restaurant anyway so as a result of that I also was like walking late I was up doing consulate it could just be that my whole body was just too stimulated and so my heart rate money chart really never recovered from both the food and the late night exercise but movement and mental stimulation I mean it could also be that I don't know the Tamiflu or something mess with your HRV I don't feel sick but if Hill exhausted I feel like I haven't slept in days the other problem is my stool is still completely effed up I am there's gotta be something else and I'm just scared because to me then the problem is will that something else prevent the CDF from clearing and then where does that leave me because the stool is is just a total mess at a ton of a ton of gas yesterday what else I did one super long 15 minute onsen plus cold plunge actually felt great before breakfast so that must've been that must've ended right around like 945 yesterday ate breakfast then eat lunch at like one 15 130 doesn't have that dinner the first two were at home after unfortunately there was some issue with the punch pole so that was the only thing that I did yesterday otherwise not sure there's other notable events"
+  }
+}

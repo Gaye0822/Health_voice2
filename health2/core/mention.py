@@ -364,7 +364,7 @@ measurement
      If yes → omit. This is narrative commentary, not a measurement.
 
   3. IS THIS AN OBJECTIVE VALUE NOT CAPTURED ELSEWHERE?
-     Gabriel states a specific number AND it does not come from an automatic device:
+     The owner states a specific number AND it does not come from an automatic device:
      - Weight read from a scale: "82.5 kg" ✅
      - Blood glucose from finger prick: "glucose 95" ✅
      - Lumen score read manually: "Lumen score 4.5" ✅
@@ -1241,14 +1241,14 @@ Thinking:
   reasoning: "Heart rate is device-tracked. No numeric value. Narrative commentary. Omitting."
 
 - "weight 82.5 kg" → measurement reasoning:
-  1. Device-sourced? NO — Gabriel reads a scale manually
+  1. Device-sourced? NO — The owner reads a scale manually
   2. Subjective? NO — specific number
   3. Objective value not captured elsewhere? YES
   → EXTRACT as measurement.
   reasoning: "Specific numeric value. Not from automatic device. Extracting."
 
 - "Lumen score 4.5" → measurement reasoning:
-  1. Device-sourced? Lumen is a device but Gabriel reads and reports it manually
+  1. Device-sourced? Lumen is a device but The owner reads and reports it manually
   2. Subjective? NO — specific number
   3. Objective value not captured elsewhere? YES — Lumen has no automatic pipeline here
   → EXTRACT as measurement.

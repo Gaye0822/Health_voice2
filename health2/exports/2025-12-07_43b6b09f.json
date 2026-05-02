@@ -1,0 +1,109 @@
+{
+  "meta": {
+    "warnings": [],
+    "validation_changes": [
+      "Applied canonical form 'Paracetamol' from knowledge base registry"
+    ],
+    "enforcer_violations": []
+  },
+  "layers": {
+    "event_layer": [
+      {
+        "type": "activity",
+        "label": "onsen",
+        "notes": "two cycles, alternated with cold plunge",
+        "status": "completed",
+        "duration": "30 minutes",
+        "warnings": [],
+        "event_date": "yesterday",
+        "kb_matched": true,
+        "start_time": "5:15",
+        "entity_date": "2025-12-06"
+      },
+      {
+        "dose": 500.0,
+        "time": null,
+        "type": "intake",
+        "unit": "mg",
+        "label": "Paracetamol",
+        "notes": "first dose, started treatment",
+        "action": "took",
+        "category": "OTC",
+        "warnings": [
+          "inferred from transcript"
+        ],
+        "event_date": "last night",
+        "kb_matched": true,
+        "dose_timing": "night",
+        "entity_date": "2025-12-06",
+        "day_of_protocol": null,
+        "is_intervention_dose": null
+      },
+      {
+        "dose": 500.0,
+        "time": null,
+        "type": "intake",
+        "unit": "mg",
+        "label": "Paracetamol",
+        "notes": null,
+        "action": "took",
+        "category": "OTC",
+        "warnings": [
+          "inferred from transcript"
+        ],
+        "event_date": null,
+        "kb_matched": true,
+        "dose_timing": "morning",
+        "entity_date": "2025-12-07",
+        "day_of_protocol": null,
+        "is_intervention_dose": null
+      },
+      {
+        "dose": null,
+        "time": null,
+        "type": "intake",
+        "unit": null,
+        "label": "Tamiflu",
+        "notes": "last prophylactic dose due to hotel room exposure",
+        "action": "took",
+        "category": "prescription",
+        "warnings": [
+          "label not found in KB registry"
+        ],
+        "event_date": null,
+        "kb_matched": false,
+        "dose_timing": "morning",
+        "entity_date": "2025-12-07",
+        "day_of_protocol": null,
+        "is_intervention_dose": null
+      }
+    ],
+    "theory_layer": [],
+    "context_layer": [],
+    "outside_bucket": [],
+    "nutrition_layer": [
+      {
+        "time": "6:00 PM",
+        "type": "meal",
+        "label": "dinner",
+        "warnings": [],
+        "eaten_out": null,
+        "event_date": "yesterday",
+        "kb_matched": true,
+        "restaurant": null,
+        "description": null,
+        "entity_date": "2025-12-06"
+      }
+    ]
+  },
+  "envelope": {
+    "note_date": "2025-12-07",
+    "audio_file": null,
+    "created_at": "2026-05-01T14:17:41Z",
+    "source_note_id": "43b6b09f-a12f-48f9-bfd8-4c482dd6adad",
+    "extraction_model": "claude-sonnet-4-20250514",
+    "pipeline_version": "1.0.0",
+    "transcription_model": "whisper-1",
+    "normalized_transcript": "Yesterday two cycles of onsen super just Wong dinner started at 6 PM but went for a good three hours the onsen must've been from like 5:20 to 5:15 to 5:45 morning one would've been 8 AM traveling in Toyota Iowa I started the paramount last night I'm now off the flight max my first dose 500 last night 500 this morning also took this morning will be my last prophylactic dose of the Tamiflu because last night I had to sleep in the same room I mean well contagious so same room with them in the hotel going to Pappadeaux since I woke up this morning but that will be the last one Celeste Lucas are still quite sick girls bounce back nicely"
+  }
+}

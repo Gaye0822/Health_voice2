@@ -294,19 +294,25 @@ def get_knowledge_for_prompt() -> str:
 # Transcripts
 # ─────────────────────────────────────────
 
-def save_transcript(raw_text: str, normalized_text: str, source: str, note_date=None) -> int:
+def save_transcript(raw_text: str, normalized_text: str, source: str, note_date=None) -> tuple:
+    """
+    Save transcript to DB. Returns (transcript_id, source_note_id).
+    source_note_id is a stable UUID for this transcript — used as envelope idempotency key.
+    """
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
         """INSERT INTO transcripts (raw_text, normalized_text, source, note_date)
-           VALUES (%s, %s, %s, %s) RETURNING id""",
+           VALUES (%s, %s, %s, %s) RETURNING id, source_note_id""",
         (raw_text, normalized_text, source, note_date)
     )
-    transcript_id = cur.fetchone()[0]
+    row = cur.fetchone()
+    transcript_id = row[0]
+    source_note_id = str(row[1])
     conn.commit()
     cur.close()
     conn.close()
-    return transcript_id
+    return transcript_id, source_note_id
 
 
 def get_transcript_by_id(transcript_id: int) -> dict:
@@ -692,7 +698,7 @@ def get_unverified_entities(status: str = "pending") -> list:
     cur.execute(
         """SELECT u.id, u.transcript_id, u.entity_id, u.entity_json,
                   u.flag_reason, u.context, u.reasoning, u.created_at,
-                  t.normalized_text
+                  t.normalized_text, t.raw_text
            FROM unverified_entities u
            JOIN transcripts t ON u.transcript_id = t.id
            WHERE u.status = %s
@@ -712,7 +718,8 @@ def get_unverified_entities(status: str = "pending") -> list:
             "context": row[5],
             "reasoning": row[6],
             "created_at": row[7],
-            "transcript_text": row[8]
+            "transcript_text": row[8],
+            "raw_transcript_text": row[9],
         }
         for row in rows
     ]
@@ -738,8 +745,13 @@ def approve_unverified_entity(unverified_id: int, canonical_label: str = None):
 
         if canonical_label:
             cur.execute(
-                "UPDATE entities SET label = %s, unverified = FALSE, flag_reason = NULL WHERE id = %s",
-                (canonical_label, entity_id)
+                """UPDATE entities
+                   SET label = %s,
+                       unverified = FALSE,
+                       flag_reason = NULL,
+                       attributes = attributes || jsonb_build_object('label', %s::text)
+                   WHERE id = %s""",
+                (canonical_label, canonical_label, entity_id)
             )
         else:
             cur.execute(
@@ -788,6 +800,36 @@ def approve_unverified_entity(unverified_id: int, canonical_label: str = None):
                         print(f"⚙️  normalize_flag approved: '{original}' added to mishearings of '{corrected}'")
 
         conn.commit()
+
+        # ── Envelope güncelle ──────────────────────────────────────────────────
+        # Entity onaylandıktan sonra ilgili transcript'in envelopunu yeniden üret
+        try:
+            cur.execute(
+                """SELECT t.id, t.normalized_text, t.note_date, e2.source_note_id
+                   FROM entities e
+                   JOIN transcripts t ON t.id = e.transcript_id
+                   JOIN envelopes e2 ON e2.transcript_id = t.id
+                   WHERE e.id = %s""",
+                (entity_id,)
+            )
+            tr = cur.fetchone()
+            if tr:
+                transcript_id, normalized_text, note_date, source_note_id = tr
+                all_entities = get_entities_by_transcript(transcript_id)
+                from core.envelope import emit_envelope
+                new_envelope = emit_envelope(
+                    entities=all_entities,
+                    validation_changes=[],
+                    enforcer_violations=[],
+                    normalized_transcript=normalized_text or "",
+                    note_date=note_date,
+                    source_note_id=str(source_note_id),
+                )
+                save_envelope(new_envelope, transcript_id=transcript_id)
+                print(f"⚙️  envelope updated after approval: source_note_id={source_note_id}")
+        except Exception as env_err:
+            print(f"⚠️  envelope update failed: {env_err}")
+
     except Exception as e:
         print(f"⚠️ approve_unverified_entity error: {e}")
         conn.rollback()
@@ -802,13 +844,18 @@ def reject_unverified_entity(unverified_id: int):
     cur = conn.cursor()
     try:
         cur.execute(
-            "SELECT entity_id FROM unverified_entities WHERE id = %s",
+            """SELECT u.entity_id, t.id, t.normalized_text, t.note_date, e2.source_note_id
+               FROM unverified_entities u
+               JOIN entities en ON en.id = u.entity_id
+               JOIN transcripts t ON t.id = en.transcript_id
+               LEFT JOIN envelopes e2 ON e2.transcript_id = t.id
+               WHERE u.id = %s""",
             (unverified_id,)
         )
         row = cur.fetchone()
         if not row:
             return
-        entity_id = row[0]
+        entity_id, transcript_id, normalized_text, note_date, source_note_id = row
 
         cur.execute("DELETE FROM entities WHERE id = %s", (entity_id,))
         cur.execute(
@@ -816,6 +863,25 @@ def reject_unverified_entity(unverified_id: int):
             (unverified_id,)
         )
         conn.commit()
+
+        # ── Envelope güncelle ──────────────────────────────────────────────────
+        if source_note_id:
+            try:
+                all_entities = get_entities_by_transcript(transcript_id)
+                from core.envelope import emit_envelope
+                new_envelope = emit_envelope(
+                    entities=all_entities,
+                    validation_changes=[],
+                    enforcer_violations=[],
+                    normalized_transcript=normalized_text or "",
+                    note_date=note_date,
+                    source_note_id=str(source_note_id),
+                )
+                save_envelope(new_envelope, transcript_id=transcript_id)
+                print(f"⚙️  envelope updated after rejection: source_note_id={source_note_id}")
+            except Exception as env_err:
+                print(f"⚠️  envelope update failed: {env_err}")
+
     except Exception as e:
         print(f"⚠️ reject_unverified_entity error: {e}")
         conn.rollback()
@@ -839,6 +905,49 @@ def get_entities_by_transcript(transcript_id: int) -> list:
          "unverified": row[3], "flag_reason": row[4]}
         for row in rows
     ]
+
+def get_recurring_info(symptom_labels: list, note_date=None, days_back: int = 7) -> dict:
+    """
+    For a list of symptom labels, check if they have appeared in the past N days.
+    Returns dict: label → {frequency_7d, first_seen, last_seen, dates}
+    Read-only — used for UI display and envelope enrichment.
+    """
+    if not symptom_labels or note_date is None:
+        return {}
+
+    from datetime import timedelta, date
+
+    today = note_date if isinstance(note_date, date) else date.today()
+    cutoff = today - timedelta(days=days_back)
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    results = {}
+    for label in symptom_labels:
+        cur.execute(
+            """SELECT note_date FROM entities
+               WHERE entity_type = 'symptom'
+               AND LOWER(label) = LOWER(%s)
+               AND note_date >= %s
+               AND note_date < %s
+               ORDER BY note_date ASC""",
+            (label, cutoff, today)
+        )
+        rows = cur.fetchall()
+        dates = [str(r[0]) for r in rows if r[0]]
+        if dates:
+            results[label] = {
+                "frequency_7d": len(dates),
+                "first_seen": dates[0],
+                "last_seen": dates[-1],
+                "dates": dates,
+            }
+
+    cur.close()
+    conn.close()
+    return results
+
 
 def get_symptom_fuzzy_matches(symptom_labels: list, note_date=None, days_back: int = 30) -> dict:
     """
@@ -934,83 +1043,106 @@ def get_symptom_fuzzy_matches(symptom_labels: list, note_date=None, days_back: i
 
     return results
 
-def get_symptom_recurring_info(symptom_labels: list, note_date=None, days_back: int = 7) -> dict:
+
+# ─────────────────────────────────────────
+# Envelopes
+# ─────────────────────────────────────────
+
+def save_envelope(envelope: dict, transcript_id: int = None) -> str:
     """
-    For a list of symptom labels, check how many times each appeared in the DB
-    over the past N days (exact label match + fuzzy match with body part guard).
-    Returns dict: label → {frequency_7d, first_seen, last_seen, dates, matched_labels}
-    Read-only — used for recurring enrichment before UI review, no writes.
+    Save a full HDS envelope to the envelopes table.
+    Returns the source_note_id.
+
+    If an envelope with the same source_note_id already exists,
+    it is replaced (full re-extraction policy — Q4).
     """
-    if not symptom_labels:
-        return {}
-
-    from datetime import date, timedelta
-    from rapidfuzz import fuzz
-
-    BODY_PARTS = {
-        "eye", "eyelid", "gland", "vision", "jaw", "face",
-        "knee", "elbow", "shoulder", "hip", "ankle", "foot", "toe",
-        "finger", "hand", "wrist", "back", "neck", "spine", "joint",
-        "lymph", "node", "groin",
-        "chest", "stomach", "abdomen", "bowel", "stool",
-        "head", "ear", "sinus",
-        "nocturia", "blepharitis", "sinusitis", "vertigo",
-        "headache", "tremor", "tingling",
-    }
-
-    def _body_tokens(s):
-        return {w for w in s.lower().split() if w in BODY_PARTS}
-
-    def _similar_enough(a, b):
-        shared = _body_tokens(a) & _body_tokens(b)
-        if not shared:
-            return False
-        pr = fuzz.partial_ratio(a.lower(), b.lower())
-        tsr = fuzz.token_sort_ratio(a.lower(), b.lower())
-        return round((pr * 0.4 + tsr * 0.6), 1) >= 80
-
-    today = note_date or date.today()
-    cutoff = today - timedelta(days=days_back)
+    env_block = envelope.get("envelope", {})
+    source_note_id = env_block.get("source_note_id")
+    note_date = env_block.get("note_date")
+    pipeline_version = env_block.get("pipeline_version")
 
     conn = get_db_connection()
     cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO envelopes
+                (source_note_id, transcript_id, note_date, pipeline_version, payload)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (source_note_id)
+            DO UPDATE SET
+                transcript_id    = EXCLUDED.transcript_id,
+                note_date        = EXCLUDED.note_date,
+                pipeline_version = EXCLUDED.pipeline_version,
+                payload          = EXCLUDED.payload,
+                created_at       = NOW(),
+                sent_to_hds      = FALSE,
+                sent_at          = NULL
+            """,
+            (
+                source_note_id,
+                transcript_id,
+                note_date,
+                pipeline_version,
+                json.dumps(envelope),
+            )
+        )
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
 
-    cur.execute(
-        """SELECT label, note_date FROM entities
-           WHERE entity_type = 'symptom'
-           AND note_date IS NOT NULL
-           AND note_date >= %s
-           AND note_date < %s
-           ORDER BY note_date ASC""",
-        (cutoff, today)
-    )
-    db_rows = cur.fetchall()
-    cur.close()
-    conn.close()
+    return source_note_id
 
-    results = {}
-    for label in symptom_labels:
-        matched_dates = []
-        matched_labels = set()
 
-        for db_label, db_date in db_rows:
-            is_exact = db_label.lower() == label.lower()
-            is_fuzzy = (not is_exact) and _similar_enough(label, db_label)
-            if is_exact or is_fuzzy:
-                matched_dates.append(db_date)
-                if is_fuzzy:
-                    matched_labels.add(db_label)
+def get_unsent_envelopes() -> list:
+    """
+    Return all envelopes not yet sent to HDS (sent_to_hds = FALSE).
+    Used for future AWS delivery.
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT source_note_id, payload, created_at
+            FROM envelopes
+            WHERE sent_to_hds = FALSE
+            ORDER BY created_at ASC
+            """
+        )
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
 
-        if matched_dates:
-            matched_dates.sort()
-            results[label] = {
-                "frequency_7d": len(matched_dates),
-                "first_seen": str(matched_dates[0]),
-                "last_seen": str(matched_dates[-1]),
-                "dates": [str(d) for d in matched_dates],
-                "matched_labels": list(matched_labels)
-            }
-        else:
-            results[label] = None
+    return [
+        {
+            "source_note_id": str(row[0]),
+            "payload": row[1],
+            "created_at": row[2].isoformat() if row[2] else None,
+        }
+        for row in rows
+    ]
 
-    return results
+
+def mark_envelope_sent(source_note_id: str):
+    """
+    Mark an envelope as sent to HDS.
+    Called after successful AWS delivery.
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE envelopes
+            SET sent_to_hds = TRUE, sent_at = NOW()
+            WHERE source_note_id = %s
+            """,
+            (source_note_id,)
+        )
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()

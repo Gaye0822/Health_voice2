@@ -7,6 +7,7 @@ from core.transcribe import transcribe_audio
 from core.normalize import normalize_transcript
 from core.mention import extract_mentions
 from core.pipeline import run_pipeline
+from core.envelope import emit_envelope
 from core.db import (
     save_transcript,
     save_entities,
@@ -15,7 +16,8 @@ from core.db import (
     save_knowledge,
     get_corrections_from_db,
     get_symptom_fuzzy_matches,
-    get_symptom_recurring_info
+    get_recurring_info,
+    save_envelope,
 )
 
 load_dotenv()
@@ -240,7 +242,7 @@ elif st.session_state.step == "review_transcript":
                                 st.toast(f"✅ Applied: '{original}' → '{custom}'")
                                 st.rerun()
 
-                # Flag for Gabriel audio review
+                # Flag for the owner audio review
                 with col4:
                     already_flagged = any(
                         f["original"] == original for f in st.session_state.pending_flags
@@ -248,7 +250,7 @@ elif st.session_state.step == "review_transcript":
                     if already_flagged:
                         st.button("🎧 Flagged", key=f"flag_{i}", disabled=True, use_container_width=True)
                     else:
-                        if st.button("🎧 Ask Gabriel", key=f"flag_{i}", use_container_width=True):
+                        if st.button("🎧 Ask", key=f"flag_{i}", use_container_width=True):
                             st.session_state.pending_flags.append({
                                 "original": original,
                                 "suggested": suggested,
@@ -294,7 +296,7 @@ elif st.session_state.step == "review_transcript":
 
     # ── Pending flags summary ─────────────────────────────────────────
     if st.session_state.pending_flags:
-        with st.expander(f"🎧 {len(st.session_state.pending_flags)} term(s) flagged for Gabriel's audio review"):
+        with st.expander(f"🎧 {len(st.session_state.pending_flags)} term(s) flagged for The owners audio review"):
             for flag in st.session_state.pending_flags:
                 st.write(f"• **{flag['original']}** — context: *\"{flag['context']}\"*")
                 if flag.get("suggested"):
@@ -519,29 +521,6 @@ elif st.session_state.step == "review_mentions":
                     if label.lower() not in kb_labels:
                         entity["_not_in_kb"] = True
 
-            # ── Recurring symptom enrichment ──────────────────────────────
-            # Validate bittikten sonra, DB'ye yazmadan önce:
-            # her symptom label için son 7 günde kaç kez göründüğünü çek,
-            # entity'ye _recurring olarak ekle — UI'da badge olarak gösterilir.
-            symptom_labels_for_recurring = [
-                e.get("label") for e in entities
-                if e.get("type") == "symptom" and e.get("label")
-            ]
-            if symptom_labels_for_recurring:
-                try:
-                    recurring_info = get_symptom_recurring_info(
-                        symptom_labels_for_recurring,
-                        note_date=st.session_state.get("note_date")
-                    )
-                    for entity in entities:
-                        if entity.get("type") == "symptom":
-                            lbl = entity.get("label", "")
-                            info = recurring_info.get(lbl)
-                            if info:
-                                entity["_recurring"] = info
-                except Exception as e:
-                    print(f"⚠️  recurring enrichment error: {e}")
-
             st.session_state.mentions = updated_mentions
             st.session_state.entities = entities
             st.session_state.validation_changes = validation_changes
@@ -572,14 +551,25 @@ elif st.session_state.step == "review_entities":
         if e.get("type") == "symptom" and e.get("label")
     ]
     fuzzy_matches = {}
+    recurring_info = {}
     if symptom_labels:
         try:
             fuzzy_matches = get_symptom_fuzzy_matches(
                 symptom_labels,
                 note_date=st.session_state.get("note_date")
             )
+            recurring_info = get_recurring_info(
+                symptom_labels,
+                note_date=st.session_state.get("note_date")
+            )
+            # Write _recurring into entities for envelope enrichment
+            for entity in event_entities:
+                if entity.get("type") == "symptom":
+                    lbl = entity.get("label", "")
+                    if lbl in recurring_info:
+                        entity["_recurring"] = recurring_info[lbl]
         except Exception as e:
-            print(f"⚠️  fuzzy match error: {e}")
+            print(f"⚠️  fuzzy/recurring lookup error: {e}")
 
     st.write(f"**{len(event_entities)} events · {len(meal_entities)} meals · {len(theory_entities)} theories · {len(outside_entities)} outside**")
 
@@ -601,16 +591,14 @@ elif st.session_state.step == "review_entities":
                     st.caption(f"⚠️ Inferred from transcript: '{entity['_raw_mention']}'")
                 if entity.get("_not_in_kb"):
                     st.caption(f"⚠️ Label '{label}' not found in KB registry")
-                # Recurring info for symptoms
-                if entity_type == "symptom":
-                    rec = entity.get("_recurring")
-                    if rec:
-                        variants = rec.get("matched_labels", [])
-                        variant_str = f" · also as: {', '.join(variants)}" if variants else ""
-                        st.caption(
-                            f"🔁 Recurring: **{rec['frequency_7d']}x** in past 7 days"
-                            f" · first: {rec['first_seen']} · last: {rec['last_seen']}{variant_str}"
-                        )
+                # Recurring badge
+                if entity_type == "symptom" and entity.get("_recurring"):
+                    rec = entity["_recurring"]
+                    freq = rec.get("frequency_7d", 0)
+                    first = rec.get("first_seen", "?")
+                    last = rec.get("last_seen", "?")
+                    st.caption(f"🔁 Recurring: {freq}x in past 7 days · first: {first} · last: {last}")
+
                 # Fuzzy match results for symptoms
                 if entity_type == "symptom" and label in fuzzy_matches:
                     result = fuzzy_matches[label]
@@ -622,8 +610,6 @@ elif st.session_state.step == "review_entities":
                     if diagnostic:
                         diag_str = " · ".join(f"{m} ({s}% ⚠️)" for m, s, _ in diagnostic)
                         st.caption(f"🔍 No body token match: {diag_str}")
-                if entity.get("entity_date"):
-                    st.caption(f"📅 entity_date: {entity['entity_date']}")
                 st.json(entity)
 
     if meal_entities:
@@ -653,7 +639,7 @@ elif st.session_state.step == "review_entities":
     col1, col2 = st.columns(2)
     with col1:
         if st.button("✅ Save to Database", type="primary"):
-            transcript_id = save_transcript(
+            transcript_id, source_note_id = save_transcript(
                 st.session_state.transcript,
                 st.session_state.normalized,
                 "voice_note",
@@ -666,6 +652,20 @@ elif st.session_state.step == "review_entities":
             if applied_corrections:
                 save_normalize_flags(transcript_id, applied_corrections, st.session_state.entities)
             st.session_state.transcript_id = transcript_id
+
+            # ── Envelope emit ──────────────────────────────────────────────────
+            envelope = emit_envelope(
+                entities=st.session_state.entities,
+                validation_changes=st.session_state.get("validation_changes", []),
+                enforcer_violations=st.session_state.get("enforcer_violations", []),
+                normalized_transcript=st.session_state.normalized or "",
+                note_date=st.session_state.get("note_date"),
+                source_note_id=source_note_id,
+            )
+            save_envelope(envelope, transcript_id=transcript_id)
+            st.session_state["last_envelope"] = envelope
+            print(f"⚙️  envelope saved: source_note_id={source_note_id}")
+
             st.session_state.step = "done"
             st.rerun()
     with col2:
@@ -679,6 +679,10 @@ elif st.session_state.step == "review_entities":
 elif st.session_state.step == "done":
     st.header("✅ Done!")
     st.success(f"Saved. Transcript ID: {st.session_state.transcript_id}")
+
+    if st.session_state.get("last_envelope"):
+        with st.expander("📦 Envelope (HDS format)", expanded=False):
+            st.json(st.session_state["last_envelope"])
 
     if st.button("Process Another Note", type="primary"):
         for key in defaults:

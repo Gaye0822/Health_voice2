@@ -52,7 +52,8 @@ from core.transcribe import transcribe_audio
 from core.normalize import normalize_transcript
 from core.mention import extract_mentions
 from core.pipeline import run_pipeline
-from core.db import save_transcript, save_entities
+from core.envelope import emit_envelope
+from core.db import save_transcript, save_entities, save_envelope
 
 
 # ── Note date extraction ───────────────────────────────────────────────────────
@@ -97,8 +98,8 @@ def process_audio_file(filepath: str):
         # Stage 3 — Save transcript to DB
         note_date = extract_note_date(filepath)
         log(f"[3/5] Saving transcript to DB... (note_date={note_date})")
-        transcript_id = save_transcript(raw, normalized, "voice_note_auto", note_date=note_date)
-        log(f"[3/5] Transcript ID: {transcript_id}")
+        transcript_id, source_note_id = save_transcript(raw, normalized, "voice_note_auto", note_date=note_date)
+        log(f"[3/5] Transcript ID: {transcript_id} | source_note_id: {source_note_id}")
 
         # Stage 4 — Extract mentions
         log(f"[4/5] Extracting mentions...")
@@ -124,6 +125,18 @@ def process_audio_file(filepath: str):
 
         # Save — all entities saved with verified=False (watcher mode)
         save_entities(entities, transcript_id, mentions, note_date=note_date)
+
+        # ── Envelope emit ──────────────────────────────────────────────────────
+        envelope = emit_envelope(
+            entities=entities,
+            validation_changes=validation_changes,
+            enforcer_violations=enforcer_violations,
+            normalized_transcript=normalized,
+            note_date=note_date,
+            source_note_id=source_note_id,
+        )
+        save_envelope(envelope, transcript_id=transcript_id)
+        log(f"[ENVELOPE] source_note_id={source_note_id} — {sum(len(v) for v in envelope['layers'].values())} record(s)")
 
         log(f"[DONE] {fname} → transcript_id={transcript_id}, {len(entities)} entities saved (unverified)")
 

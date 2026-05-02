@@ -1,0 +1,87 @@
+{
+  "meta": {
+    "warnings": [],
+    "validation_changes": [],
+    "enforcer_violations": []
+  },
+  "layers": {
+    "event_layer": [
+      {
+        "type": "symptom",
+        "label": "stool consistency",
+        "notes": null,
+        "source": null,
+        "status": "present",
+        "duration": null,
+        "interval": null,
+        "severity": null,
+        "warnings": [],
+        "qualifier": "soft mess, complete disaster",
+        "event_date": null,
+        "kb_matched": true,
+        "onset_time": null,
+        "entity_date": "2025-12-02"
+      },
+      {
+        "type": "activity",
+        "label": "workout",
+        "notes": "first time in forever, lost a ton of strength",
+        "status": "completed",
+        "duration": null,
+        "warnings": [],
+        "event_date": "yesterday",
+        "kb_matched": true,
+        "start_time": null,
+        "entity_date": "2025-12-01"
+      }
+    ],
+    "theory_layer": [
+      {
+        "type": "theory",
+        "raw_text": "pretty sure I've got a second bug",
+        "warnings": [],
+        "kb_matched": true,
+        "linked_to_type": "symptom",
+        "linked_to_label": "stool consistency"
+      }
+    ],
+    "context_layer": [],
+    "outside_bucket": [],
+    "nutrition_layer": [
+      {
+        "time": null,
+        "type": "meal",
+        "label": "meals",
+        "warnings": [],
+        "eaten_out": true,
+        "event_date": "yesterday",
+        "kb_matched": true,
+        "restaurant": null,
+        "description": null,
+        "entity_date": "2025-12-01"
+      },
+      {
+        "time": "late",
+        "type": "meal",
+        "label": "late meal",
+        "warnings": [],
+        "eaten_out": true,
+        "event_date": "yesterday",
+        "kb_matched": true,
+        "restaurant": null,
+        "description": null,
+        "entity_date": "2025-12-01"
+      }
+    ]
+  },
+  "envelope": {
+    "note_date": "2025-12-02",
+    "audio_file": null,
+    "created_at": "2026-05-01T12:33:06Z",
+    "source_note_id": "282bb700-7a81-4c1e-8f0a-2908bc3eaaef",
+    "extraction_model": "claude-sonnet-4-20250514",
+    "pipeline_version": "1.0.0",
+    "transcription_model": "whisper-1",
+    "normalized_transcript": "Yesterday was a bit of an odd day everything could've gone wrong did go wrong I mean everything no sending every meal was eaten out of the home because we didn't have any food here last meal ended up pretty late I've gotten this really bad habit since the thing is I don't know maybe it's psychological but it seems like the nuts in the fiber or hurting my stomach and making it more difficult to digest so I've been eating more carbs I just don't feel great about it's easier to digest the stool stool soft mess I'm gonna try to have someone come today and pick up a sample here because again I'm still pretty sure that I've got a second bug I mean the stool is just a complete disaster that or the medication's not working super super frustrating yesterday I worked out for the first time in forever and like I just lost a ton of strength a ton of strength also I keep not being able to sleep I keep waking up super early in the morning and yeah I've lost all the side aside all the benefits all the mental stuff all the psychological stuff"
+  }
+}
