@@ -942,7 +942,7 @@ def structure_mentions(mentions: list, normalized_text: str) -> list:
 
     
 
-    return _resolve_time_references(entities)
+    return entities
 
 
 def _attach_raw_mentions(entities: list, mentions: list) -> list:
@@ -973,13 +973,4 @@ def _attach_raw_mentions(entities: list, mentions: list) -> list:
                 print(f"⚙️  attach_raw_mention: '{m_inferred}' → '{label}' (via inferred_as)")
                 break
 
-    return entities
-
-
-def _resolve_time_references(entities: list) -> list:
-    now = datetime.now().isoformat()
-    for entity in entities:
-        for key, value in entity.items():
-            if isinstance(value, str) and value.lower() in ["now", "just now", "right now"]:
-                entity[key] = now
     return entities

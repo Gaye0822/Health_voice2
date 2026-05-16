@@ -21,11 +21,8 @@ def _get_knowledge() -> str:
 
 
 def _resolve_time_references(entities: list) -> list:
-    now = datetime.now().isoformat()
-    for entity in entities:
-        for key, value in entity.items():
-            if isinstance(value, str) and value.lower() in ["now", "just now", "right now"]:
-                entity[key] = now
+    # "right now / just now / now" expressions are preserved as-is.
+    # We don't know the recording time, so replacing with system clock is incorrect.
     return entities
 
 

@@ -423,14 +423,19 @@ def save_entities(entities: list, transcript_id: int, mentions: list = None, not
             if not context:
                 context = mention_info.get("context")
 
-        # entity_date: event_date string'ini note_date'e göre gerçek tarihe çevir
-        # Örn: event_date="yesterday" + note_date=2026-04-06 → entity_date=2026-04-05
-        entity_date = note_date  # default: note_date
-        event_date_raw = entity.get("event_date")
-        if event_date_raw and note_date:
+        # entity_date: schema_enforcer already resolves this and writes it into the entity.
+        # Use that value directly. Only fall back to self-resolving event_date if missing.
+        entity_date = note_date  # default
+        if entity.get("entity_date"):
+            try:
+                from datetime import date as _date
+                entity_date = _date.fromisoformat(str(entity["entity_date"]))
+            except Exception:
+                pass
+        elif entity.get("event_date") and note_date:
             try:
                 from core.schema_enforcer import _resolve_start_date_to_iso
-                resolved = _resolve_start_date_to_iso(event_date_raw, note_date)
+                resolved = _resolve_start_date_to_iso(entity["event_date"], note_date)
                 if resolved:
                     entity_date = resolved
             except Exception:
@@ -445,25 +450,29 @@ def save_entities(entities: list, transcript_id: int, mentions: list = None, not
 
         # Recurring detection + fuzzy matching — terminal only, no schema change
         if entity_type == "symptom" and note_date is not None:
-            # 1. Exact recurring check
+            # 1. Exact recurring check — present and absent counted separately
+            current_status = entity.get("status", "present")
             cur.execute(
-                """SELECT COUNT(*), MIN(note_date), MAX(note_date)
+                """SELECT COUNT(DISTINCT entity_date), MIN(entity_date), MAX(entity_date)
                    FROM entities
                    WHERE entity_type = 'symptom'
                    AND LOWER(label) = LOWER(%s)
-                   AND note_date >= %s - INTERVAL '7 days'
-                   AND note_date < %s""",
-                (label, note_date, note_date)
+                   AND (attributes->>'status' = %s
+                        OR (attributes->>'status' IS NULL AND %s = 'present'))
+                   AND entity_date >= %s - INTERVAL '7 days'
+                   AND entity_date < %s""",
+                (label, current_status, current_status, note_date, note_date)
             )
             row = cur.fetchone()
             freq = row[0] if row else 0
             first_seen = row[1] if row else None
             last_seen = row[2] if row else None
+            status_label = f"[{current_status.upper()}]"
             if freq > 0:
-                print(f"🔁 RECURRING [{freq}x in past 7 days]: symptom '{label}' "
+                print(f"🔁 RECURRING {status_label} [{freq}x in past 7 days]: symptom '{label}' "
                       f"| first: {first_seen} | last: {last_seen} | today: {note_date}")
             else:
-                print(f"🆕 NEW symptom '{label}' | note_date: {note_date}")
+                print(f"🆕 NEW {status_label} symptom '{label}' | note_date: {note_date}")
 
             # 2. Fuzzy match against all distinct symptom labels in DB (past 30 days)
             cur.execute(
@@ -909,7 +918,11 @@ def get_entities_by_transcript(transcript_id: int) -> list:
 def get_recurring_info(symptom_labels: list, note_date=None, days_back: int = 7) -> dict:
     """
     For a list of symptom labels, check if they have appeared in the past N days.
-    Returns dict: label → {frequency_7d, first_seen, last_seen, dates}
+    Returns dict: label → {
+        "present": {frequency_7d, first_seen, last_seen, dates},
+        "absent":  {frequency_7d, first_seen, last_seen, dates},
+    }
+    present and absent are counted separately — they never mix.
     Read-only — used for UI display and envelope enrichment.
     """
     if not symptom_labels or note_date is None:
@@ -925,24 +938,30 @@ def get_recurring_info(symptom_labels: list, note_date=None, days_back: int = 7)
 
     results = {}
     for label in symptom_labels:
-        cur.execute(
-            """SELECT note_date FROM entities
-               WHERE entity_type = 'symptom'
-               AND LOWER(label) = LOWER(%s)
-               AND note_date >= %s
-               AND note_date < %s
-               ORDER BY note_date ASC""",
-            (label, cutoff, today)
-        )
-        rows = cur.fetchall()
-        dates = [str(r[0]) for r in rows if r[0]]
-        if dates:
-            results[label] = {
-                "frequency_7d": len(dates),
-                "first_seen": dates[0],
-                "last_seen": dates[-1],
-                "dates": dates,
-            }
+        entry = {}
+        for status in ("present", "absent"):
+            cur.execute(
+                """SELECT DISTINCT entity_date FROM entities
+                   WHERE entity_type = 'symptom'
+                   AND LOWER(label) = LOWER(%s)
+                   AND (attributes->>'status' = %s
+                        OR (attributes->>'status' IS NULL AND %s = 'present'))
+                   AND entity_date >= %s
+                   AND entity_date < %s
+                   ORDER BY entity_date ASC""",
+                (label, status, status, cutoff, today)
+            )
+            rows = cur.fetchall()
+            dates = [str(r[0]) for r in rows if r[0]]
+            if dates:
+                entry[status] = {
+                    "frequency_7d": len(dates),
+                    "first_seen": dates[0],
+                    "last_seen": dates[-1],
+                    "dates": dates,
+                }
+        if entry:
+            results[label] = entry
 
     cur.close()
     conn.close()

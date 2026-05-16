@@ -1,6 +1,8 @@
 import streamlit as st
 import json
 import os
+import re
+from datetime import datetime
 from dotenv import load_dotenv
 
 from core.transcribe import transcribe_audio
@@ -111,7 +113,14 @@ if st.session_state.step == "upload":
             st.session_state.edited = result["normalized_text"]
             st.session_state.low_confidence_segments = result["low_confidence_segments"]
             st.session_state.applied_corrections = result.get("applied_corrections", [])
-            st.session_state.note_date = None  # audio: no Created_at available yet
+            # Parse note_date from filename (format: YYYYMMDDTHHMMSS...)
+            match = re.match(r'(\d{8})T', uploaded_file.name)
+            if match:
+                st.session_state.note_date = datetime.strptime(match.group(1), "%Y%m%d").date()
+                print(f"⚙️  Note date from filename: {st.session_state.note_date}")
+            else:
+                st.session_state.note_date = datetime.now().date()
+                print(f"⚠️  Could not parse date from filename, using today: {st.session_state.note_date}")
             st.session_state.edit_mode = False
             st.session_state.pending_flags = []
             st.session_state.step = "review_transcript"
@@ -563,11 +572,16 @@ elif st.session_state.step == "review_entities":
                 note_date=st.session_state.get("note_date")
             )
             # Write _recurring into entities for envelope enrichment
+            # Use entity's own status to pick the right recurring block —
+            # present and absent are counted separately, format stays the same
             for entity in event_entities:
                 if entity.get("type") == "symptom":
                     lbl = entity.get("label", "")
                     if lbl in recurring_info:
-                        entity["_recurring"] = recurring_info[lbl]
+                        entity_status = entity.get("status", "present")
+                        status_block = recurring_info[lbl].get(entity_status)
+                        if status_block:
+                            entity["_recurring"] = status_block
         except Exception as e:
             print(f"⚠️  fuzzy/recurring lookup error: {e}")
 
@@ -594,10 +608,20 @@ elif st.session_state.step == "review_entities":
                 # Recurring badge
                 if entity_type == "symptom" and entity.get("_recurring"):
                     rec = entity["_recurring"]
-                    freq = rec.get("frequency_7d", 0)
-                    first = rec.get("first_seen", "?")
-                    last = rec.get("last_seen", "?")
-                    st.caption(f"🔁 Recurring: {freq}x in past 7 days · first: {first} · last: {last}")
+                    if "present" in rec or "absent" in rec:
+                        parts = []
+                        if "present" in rec:
+                            p = rec["present"]
+                            parts.append(f"present {p['frequency_7d']}x · first: {p['first_seen']} · last: {p['last_seen']}")
+                        if "absent" in rec:
+                            a = rec["absent"]
+                            parts.append(f"absent {a['frequency_7d']}x · first: {a['first_seen']} · last: {a['last_seen']}")
+                        st.caption("🔁 Recurring: " + " | ".join(parts))
+                    else:
+                        freq = rec.get("frequency_7d", 0)
+                        first = rec.get("first_seen", "?")
+                        last = rec.get("last_seen", "?")
+                        st.caption(f"🔁 Recurring: {freq}x in past 7 days · first: {first} · last: {last}")
 
                 # Fuzzy match results for symptoms
                 if entity_type == "symptom" and label in fuzzy_matches:
