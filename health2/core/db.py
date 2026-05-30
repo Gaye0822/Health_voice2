@@ -298,17 +298,54 @@ def save_transcript(raw_text: str, normalized_text: str, source: str, note_date=
     """
     Save transcript to DB. Returns (transcript_id, source_note_id).
     source_note_id is a stable UUID for this transcript — used as envelope idempotency key.
+
+    Upsert: if a transcript with the same source (filename) already exists,
+    update it in place and return the existing transcript_id.
+    Entities for that transcript are deleted before re-save so pipeline
+    can write fresh entities on top.
     """
     conn = get_db_connection()
     cur = conn.cursor()
+
+    # Check if this source already exists
     cur.execute(
-        """INSERT INTO transcripts (raw_text, normalized_text, source, note_date)
-           VALUES (%s, %s, %s, %s) RETURNING id, source_note_id""",
-        (raw_text, normalized_text, source, note_date)
+        "SELECT id, source_note_id FROM transcripts WHERE source = %s",
+        (source,)
     )
-    row = cur.fetchone()
-    transcript_id = row[0]
-    source_note_id = str(row[1])
+    existing = cur.fetchone()
+
+    if existing:
+        transcript_id = existing[0]
+        source_note_id = str(existing[1])
+        # Update transcript text
+        cur.execute(
+            """UPDATE transcripts
+               SET raw_text = %s, normalized_text = %s, note_date = %s
+               WHERE id = %s""",
+            (raw_text, normalized_text, note_date, transcript_id)
+        )
+        # Delete existing unverified_entities first (FK references entities)
+        cur.execute(
+            "DELETE FROM unverified_entities WHERE transcript_id = %s",
+            (transcript_id,)
+        )
+        # Then delete entities
+        cur.execute(
+            "DELETE FROM entities WHERE transcript_id = %s",
+            (transcript_id,)
+        )
+        print(f"⚙️  upsert: existing transcript updated (id={transcript_id}, source={source})")
+    else:
+        cur.execute(
+            """INSERT INTO transcripts (raw_text, normalized_text, source, note_date)
+               VALUES (%s, %s, %s, %s) RETURNING id, source_note_id""",
+            (raw_text, normalized_text, source, note_date)
+        )
+        row = cur.fetchone()
+        transcript_id = row[0]
+        source_note_id = str(row[1])
+        print(f"⚙️  upsert: new transcript created (id={transcript_id}, source={source})")
+
     conn.commit()
     cur.close()
     conn.close()
@@ -358,6 +395,15 @@ def save_entities(entities: list, transcript_id: int, mentions: list = None, not
                 "reasoning": m.get("reasoning", ""),
                 "context": m.get("context", "")
             }
+
+    # Build symptom mention list in order — parallel to symptom entities
+    _symptom_mentions = [
+        m for m in (mentions or [])
+        if m.get("candidate_type") == "symptom"
+    ]
+    _symptom_entity_idx = 0  # tracks which symptom entity we're on
+
+
 
     for entity in entities:
         entity = entity.copy()
@@ -423,19 +469,14 @@ def save_entities(entities: list, transcript_id: int, mentions: list = None, not
             if not context:
                 context = mention_info.get("context")
 
-        # entity_date: schema_enforcer already resolves this and writes it into the entity.
-        # Use that value directly. Only fall back to self-resolving event_date if missing.
-        entity_date = note_date  # default
-        if entity.get("entity_date"):
-            try:
-                from datetime import date as _date
-                entity_date = _date.fromisoformat(str(entity["entity_date"]))
-            except Exception:
-                pass
-        elif entity.get("event_date") and note_date:
+        # entity_date: event_date string'ini note_date'e göre gerçek tarihe çevir
+        # Örn: event_date="yesterday" + note_date=2026-04-06 → entity_date=2026-04-05
+        entity_date = note_date  # default: note_date
+        event_date_raw = entity.get("event_date")
+        if event_date_raw and note_date:
             try:
                 from core.schema_enforcer import _resolve_start_date_to_iso
-                resolved = _resolve_start_date_to_iso(entity["event_date"], note_date)
+                resolved = _resolve_start_date_to_iso(event_date_raw, note_date)
                 if resolved:
                     entity_date = resolved
             except Exception:
@@ -448,38 +489,59 @@ def save_entities(entities: list, transcript_id: int, mentions: list = None, not
         )
         entity_id = cur.fetchone()[0]
 
+        # Low-confidence symptom → symptom_label_reviews
+        # Nth symptom entity → Nth symptom mention (order-preserving across all symptoms)
+        if entity_type == "symptom":
+            if _symptom_entity_idx < len(_symptom_mentions):
+                _sm = _symptom_mentions[_symptom_entity_idx]
+                if _sm.get("confidence") == "low":
+                    try:
+                        import sys as _sys, os as _os
+                        _parent = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+                        if _parent not in _sys.path:
+                            _sys.path.insert(0, _parent)
+                        from symptom_label_review import save_symptom_for_review
+                        save_symptom_for_review(
+                            proposed_label=label,
+                            transcript_context=_sm.get("context", ""),
+                            llm_reasoning=_sm.get("reasoning", ""),
+                            entity_json={"type": entity_type, "label": label, **{k: v for k, v in entity.items() if not k.startswith("_")}},
+                            transcript_id=transcript_id,
+                            entity_id=entity_id,
+                            note_date=note_date,
+                        )
+                    except Exception as _e:
+                        print(f"⚠️  symptom_label_review queue error: {_e}")
+            _symptom_entity_idx += 1
+
         # Recurring detection + fuzzy matching — terminal only, no schema change
         if entity_type == "symptom" and note_date is not None:
-            # 1. Exact recurring check — present and absent counted separately
-            current_status = entity.get("status", "present")
+            # 1. Exact recurring check
             cur.execute(
-                """SELECT COUNT(DISTINCT entity_date), MIN(entity_date), MAX(entity_date)
+                """SELECT COUNT(*), MIN(entity_date), MAX(entity_date)
                    FROM entities
                    WHERE entity_type = 'symptom'
                    AND LOWER(label) = LOWER(%s)
-                   AND (attributes->>'status' = %s
-                        OR (attributes->>'status' IS NULL AND %s = 'present'))
                    AND entity_date >= %s - INTERVAL '7 days'
                    AND entity_date < %s""",
-                (label, current_status, current_status, note_date, note_date)
+                (label, note_date, note_date)
             )
             row = cur.fetchone()
             freq = row[0] if row else 0
             first_seen = row[1] if row else None
             last_seen = row[2] if row else None
-            status_label = f"[{current_status.upper()}]"
             if freq > 0:
-                print(f"🔁 RECURRING {status_label} [{freq}x in past 7 days]: symptom '{label}' "
+                print(f"🔁 RECURRING [{freq}x in past 7 days]: symptom '{label}' "
                       f"| first: {first_seen} | last: {last_seen} | today: {note_date}")
             else:
-                print(f"🆕 NEW {status_label} symptom '{label}' | note_date: {note_date}")
+                print(f"🆕 NEW symptom '{label}' | note_date: {note_date}")
 
             # 2. Fuzzy match against all distinct symptom labels in DB (past 30 days)
             cur.execute(
                 """SELECT DISTINCT label FROM entities
                    WHERE entity_type = 'symptom'
                    AND LOWER(label) != LOWER(%s)
-                   AND note_date >= %s - INTERVAL '30 days'""",
+                    AND entity_date >= %s - INTERVAL '30 days'""",
                 (label, note_date)
             )
             existing_labels = [r[0] for r in cur.fetchall()]
@@ -918,11 +980,7 @@ def get_entities_by_transcript(transcript_id: int) -> list:
 def get_recurring_info(symptom_labels: list, note_date=None, days_back: int = 7) -> dict:
     """
     For a list of symptom labels, check if they have appeared in the past N days.
-    Returns dict: label → {
-        "present": {frequency_7d, first_seen, last_seen, dates},
-        "absent":  {frequency_7d, first_seen, last_seen, dates},
-    }
-    present and absent are counted separately — they never mix.
+    Returns dict: label → {frequency_7d, first_seen, last_seen, dates}
     Read-only — used for UI display and envelope enrichment.
     """
     if not symptom_labels or note_date is None:
@@ -936,32 +994,37 @@ def get_recurring_info(symptom_labels: list, note_date=None, days_back: int = 7)
     conn = get_db_connection()
     cur = conn.cursor()
 
+    # symptom_labels can be a list or a dict {label: status}
+    if isinstance(symptom_labels, dict):
+        label_status_map = symptom_labels
+    else:
+        label_status_map = {label: "present" for label in symptom_labels}
+
     results = {}
-    for label in symptom_labels:
-        entry = {}
-        for status in ("present", "absent"):
-            cur.execute(
-                """SELECT DISTINCT entity_date FROM entities
-                   WHERE entity_type = 'symptom'
-                   AND LOWER(label) = LOWER(%s)
-                   AND (attributes->>'status' = %s
-                        OR (attributes->>'status' IS NULL AND %s = 'present'))
-                   AND entity_date >= %s
-                   AND entity_date < %s
-                   ORDER BY entity_date ASC""",
-                (label, status, status, cutoff, today)
-            )
-            rows = cur.fetchall()
-            dates = [str(r[0]) for r in rows if r[0]]
-            if dates:
-                entry[status] = {
-                    "frequency_7d": len(dates),
-                    "first_seen": dates[0],
-                    "last_seen": dates[-1],
-                    "dates": dates,
-                }
-        if entry:
-            results[label] = entry
+    for label, current_status in label_status_map.items():
+        target = 'absent' if current_status == 'absent' else 'present'
+        cur.execute(
+            """SELECT entity_date, COALESCE(attributes->>'status', 'present') AS status
+               FROM entities
+               WHERE entity_type = 'symptom'
+               AND LOWER(label) = LOWER(%s)
+               AND entity_date >= %s
+               AND entity_date < %s
+               ORDER BY entity_date ASC""",
+            (label, cutoff, today)
+        )
+        rows = cur.fetchall()
+        matched_dates = [
+            str(r[0]) for r in rows if r[0] and
+            (r[1] == 'absent' if target == 'absent' else r[1] != 'absent')
+        ]
+        if matched_dates:
+            results[label] = {
+                "frequency_7d": len(matched_dates),
+                "first_seen": matched_dates[0],
+                "last_seen": matched_dates[-1],
+                "dates": matched_dates,
+            }
 
     cur.close()
     conn.close()
@@ -1023,7 +1086,7 @@ def get_symptom_fuzzy_matches(symptom_labels: list, note_date=None, days_back: i
     cur.execute(
         """SELECT DISTINCT label FROM entities
            WHERE entity_type = 'symptom'
-           AND (note_date IS NULL OR note_date >= %s)""",
+           AND (entity_date IS NULL OR entity_date >= %s)""",
         (cutoff,)
     )
     existing_labels = [r[0] for r in cur.fetchall()]

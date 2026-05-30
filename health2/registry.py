@@ -196,7 +196,7 @@ def delete_entry(entry_id: int):
 # UI — Tabs
 # ─────────────────────────────────────────
 
-tab1, tab2, tab3, tab4 = st.tabs(["📋 Registry", "🗑️ Removals", "🔀 Classifications", "⚠️ Unverified"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📋 Registry", "🗑️ Removals", "🔀 Classifications", "⚠️ Unverified", "🔬 Symptom Labels"])
 
 
 # ══════════════════════════════════════════
@@ -591,3 +591,128 @@ with tab4:
                             reject_unverified_entity(item["id"])
                             st.toast(f"❌ Rejected: {label}")
                             st.rerun()
+
+# ══════════════════════════════════════════
+# TAB 5 — Symptom Label Review
+# ══════════════════════════════════════════
+
+with tab5:
+    st.header("Symptom Label Review")
+    st.caption(
+        "Low-confidence symptom labels flagged by the pipeline. "
+        "Review each one — approve, correct, or reject. "
+        "Approved labels are added to the KB so the system learns."
+    )
+
+    try:
+        import sys, os
+        _root = os.path.dirname(os.path.abspath(__file__))
+        if _root not in sys.path:
+            sys.path.insert(0, _root)
+        from symptom_label_review import (
+            get_pending_symptom_reviews,
+            approve_symptom_label,
+            correct_symptom_label,
+            reject_symptom_label,
+        )
+    except ImportError as e:
+        st.error(f"symptom_label_review.py not found: {e}")
+        st.stop()
+
+    slr_status = st.radio("Show", ["pending", "approved", "corrected", "rejected"], horizontal=True, key="slr_status")
+    reviews = get_pending_symptom_reviews(status=slr_status)
+
+    if not reviews:
+        st.info(f"No {slr_status} symptom label reviews.")
+    else:
+        st.write(f"**{len(reviews)} record(s)**")
+        st.divider()
+
+        for item in reviews:
+            review_id      = item["id"]
+            proposed_label = item["proposed_label"]
+            context        = item["transcript_context"] or ""
+            reasoning      = item["llm_reasoning"] or ""
+            entity_json    = item["entity_json"] or {}
+            note_date      = item["note_date"]
+            approved_label = item["approved_label"]
+
+            header = f"🏷️ **{proposed_label}**"
+            if note_date:
+                header += f"  —  {note_date}"
+            if slr_status != "pending" and approved_label:
+                header += f"  →  ✅ *{approved_label}*"
+
+            with st.expander(header, expanded=(slr_status == "pending")):
+                col_info, col_action = st.columns([3, 1])
+
+                with col_info:
+                    if context:
+                        st.markdown("**Transcript context:**")
+                        st.info(f'"{context}"')
+
+                    if reasoning:
+                        st.markdown("**LLM reasoning:**")
+                        st.caption(reasoning)
+
+                    st.markdown("**Proposed entity:**")
+                    st.json(entity_json)
+
+                with col_action:
+                    if slr_status == "pending":
+                        description = st.text_area(
+                            "Description for KB",
+                            placeholder="What does this symptom mean? (optional but recommended)",
+                            key=f"slr_desc_{review_id}",
+                            height=80,
+                        )
+
+                        if st.button("✅ Approve as-is", key=f"slr_approve_{review_id}", use_container_width=True):
+                            ok = approve_symptom_label(review_id, description=description or None)
+                            if ok:
+                                st.toast(f"✅ Approved: '{proposed_label}'")
+                                st.rerun()
+                            else:
+                                st.error("Approval failed — check logs.")
+
+                        st.divider()
+
+                        new_label = st.text_input(
+                            "Correct label",
+                            value=proposed_label,
+                            key=f"slr_newlabel_{review_id}",
+                            placeholder="Enter correct label...",
+                        )
+
+                        if st.button("✏️ Correct & Approve", key=f"slr_correct_{review_id}", use_container_width=True):
+                            if new_label and new_label.strip():
+                                if new_label.strip().lower() == proposed_label.lower():
+                                    st.warning("Label is the same as proposed. Use 'Approve as-is' instead.")
+                                else:
+                                    ok = correct_symptom_label(
+                                        review_id,
+                                        new_label=new_label.strip(),
+                                        description=description or None
+                                    )
+                                    if ok:
+                                        st.toast(f"✅ Corrected: '{proposed_label}' → '{new_label.strip()}'")
+                                        st.rerun()
+                                    else:
+                                        st.error("Correction failed — check logs.")
+                            else:
+                                st.warning("Please enter a label.")
+
+                        st.divider()
+
+                        if st.button("❌ Reject", key=f"slr_reject_{review_id}", use_container_width=True):
+                            ok = reject_symptom_label(review_id)
+                            if ok:
+                                st.toast(f"❌ Rejected: '{proposed_label}'")
+                                st.rerun()
+                            else:
+                                st.error("Rejection failed — check logs.")
+
+                    else:
+                        st.write(f"**Status:** {slr_status}")
+                        if approved_label:
+                            st.write(f"**Final label:** {approved_label}")

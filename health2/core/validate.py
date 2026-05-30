@@ -20,10 +20,6 @@ def _get_knowledge() -> str:
         return ""
 
 
-def _resolve_time_references(entities: list) -> list:
-    # "right now / just now / now" expressions are preserved as-is.
-    # We don't know the recording time, so replacing with system clock is incorrect.
-    return entities
 
 
 def _check_measurement_metrics(entities: list, transcript: str) -> tuple:
@@ -160,7 +156,7 @@ def validate_entities(entities: list, normalized_text: str) -> tuple:
     to_validate = [e for e in entities if e.get("type") not in PROTECTED_TYPES]
 
     if not to_validate:
-        return _resolve_time_references(protected), all_changes
+        return protected, all_changes
 
     # ── Step 3: LLM validator — KB lookup + contradiction check only ──────
     knowledge = _get_knowledge()
@@ -314,7 +310,7 @@ If no changes needed, return original entities with empty changes list."""
 
     if not raw:
         print("⚠️ Validator empty response")
-        return _resolve_time_references(to_validate + protected), all_changes
+        return to_validate + protected, all_changes
 
     try:
         parsed = json.loads(raw)
@@ -398,7 +394,7 @@ If no changes needed, return original entities with empty changes list."""
                     e["type"] = original_type
 
         all_changes.extend(llm_changes)
-        final_entities = _resolve_time_references(validated) + protected
+        final_entities = validated + protected
 
         # Re-validate through Pydantic to ensure all fields have defaults
         try:
@@ -414,4 +410,4 @@ If no changes needed, return original entities with empty changes list."""
         return final, all_changes
     except json.JSONDecodeError as e:
         print(f"⚠️ Validator JSON parse error: {e}")
-        return _resolve_time_references(to_validate + protected), all_changes
+        return to_validate + protected, all_changes

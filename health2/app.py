@@ -1,8 +1,6 @@
 import streamlit as st
 import json
 import os
-import re
-from datetime import datetime
 from dotenv import load_dotenv
 
 from core.transcribe import transcribe_audio
@@ -42,6 +40,7 @@ defaults = {
     "edit_mode": False,
     "pending_flags": [],
     "note_date": None,           # date of the voice note from Created_at field
+    "source_filename": None,     # original filename — used as unique key for upsert
 }
 for key, val in defaults.items():
     if key not in st.session_state:
@@ -113,14 +112,19 @@ if st.session_state.step == "upload":
             st.session_state.edited = result["normalized_text"]
             st.session_state.low_confidence_segments = result["low_confidence_segments"]
             st.session_state.applied_corrections = result.get("applied_corrections", [])
-            # Parse note_date from filename (format: YYYYMMDDTHHMMSS...)
-            match = re.match(r'(\d{8})T', uploaded_file.name)
-            if match:
-                st.session_state.note_date = datetime.strptime(match.group(1), "%Y%m%d").date()
-                print(f"⚙️  Note date from filename: {st.session_state.note_date}")
+            # Try to parse note_date from filename (e.g. 20260506T052216Z-xxx.m4a)
+            import re as _re
+            _fname = uploaded_file.name
+            _m = _re.match(r"(\d{4})(\d{2})(\d{2})T", _fname)
+            if _m:
+                from datetime import date as _date
+                _note_date = _date(int(_m.group(1)), int(_m.group(2)), int(_m.group(3)))
+                print(f"⚙️  Note date from filename: {_note_date}")
             else:
-                st.session_state.note_date = datetime.now().date()
-                print(f"⚠️  Could not parse date from filename, using today: {st.session_state.note_date}")
+                _note_date = datetime.now().date()
+                print(f"⚠️  No date in filename, using today: {_note_date}")
+            st.session_state.note_date = _note_date
+            st.session_state.source_filename = uploaded_file.name
             st.session_state.edit_mode = False
             st.session_state.pending_flags = []
             st.session_state.step = "review_transcript"
@@ -163,6 +167,7 @@ if st.session_state.step == "upload":
                     st.session_state.low_confidence_segments = result["low_confidence_segments"]
                     st.session_state.applied_corrections = result.get("applied_corrections", [])
                     st.session_state.note_date = note_date
+                    st.session_state.source_filename = json_file.name
                     st.session_state.edit_mode = False
                     st.session_state.pending_flags = []
                     st.session_state.step = "review_transcript"
@@ -530,6 +535,11 @@ elif st.session_state.step == "review_mentions":
                     if label.lower() not in kb_labels:
                         entity["_not_in_kb"] = True
 
+                # Check KB — symptom label not in KB
+                if entity_type == "symptom":
+                    if label.lower() not in kb_labels:
+                        entity["_not_in_kb"] = True
+
             st.session_state.mentions = updated_mentions
             st.session_state.entities = entities
             st.session_state.validation_changes = validation_changes
@@ -567,21 +577,21 @@ elif st.session_state.step == "review_entities":
                 symptom_labels,
                 note_date=st.session_state.get("note_date")
             )
+            symptom_label_status = {
+                e.get("label", ""): e.get("status", "present")
+                for e in event_entities
+                if e.get("type") == "symptom" and e.get("label")
+            }
             recurring_info = get_recurring_info(
-                symptom_labels,
+                symptom_label_status,
                 note_date=st.session_state.get("note_date")
             )
             # Write _recurring into entities for envelope enrichment
-            # Use entity's own status to pick the right recurring block —
-            # present and absent are counted separately, format stays the same
             for entity in event_entities:
                 if entity.get("type") == "symptom":
                     lbl = entity.get("label", "")
                     if lbl in recurring_info:
-                        entity_status = entity.get("status", "present")
-                        status_block = recurring_info[lbl].get(entity_status)
-                        if status_block:
-                            entity["_recurring"] = status_block
+                        entity["_recurring"] = recurring_info[lbl]
         except Exception as e:
             print(f"⚠️  fuzzy/recurring lookup error: {e}")
 
@@ -608,20 +618,10 @@ elif st.session_state.step == "review_entities":
                 # Recurring badge
                 if entity_type == "symptom" and entity.get("_recurring"):
                     rec = entity["_recurring"]
-                    if "present" in rec or "absent" in rec:
-                        parts = []
-                        if "present" in rec:
-                            p = rec["present"]
-                            parts.append(f"present {p['frequency_7d']}x · first: {p['first_seen']} · last: {p['last_seen']}")
-                        if "absent" in rec:
-                            a = rec["absent"]
-                            parts.append(f"absent {a['frequency_7d']}x · first: {a['first_seen']} · last: {a['last_seen']}")
-                        st.caption("🔁 Recurring: " + " | ".join(parts))
-                    else:
-                        freq = rec.get("frequency_7d", 0)
-                        first = rec.get("first_seen", "?")
-                        last = rec.get("last_seen", "?")
-                        st.caption(f"🔁 Recurring: {freq}x in past 7 days · first: {first} · last: {last}")
+                    freq = rec.get("frequency_7d", 0)
+                    first = rec.get("first_seen", "?")
+                    last = rec.get("last_seen", "?")
+                    st.caption(f"🔁 Recurring: {freq}x in past 7 days · first: {first} · last: {last}")
 
                 # Fuzzy match results for symptoms
                 if entity_type == "symptom" and label in fuzzy_matches:
@@ -666,7 +666,7 @@ elif st.session_state.step == "review_entities":
             transcript_id, source_note_id = save_transcript(
                 st.session_state.transcript,
                 st.session_state.normalized,
-                "voice_note",
+                st.session_state.get("source_filename") or "voice_note",
                 note_date=st.session_state.get("note_date")
             )
             save_entities(st.session_state.entities, transcript_id, st.session_state.mentions,

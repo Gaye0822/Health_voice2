@@ -953,24 +953,24 @@ def _attach_raw_mentions(entities: list, mentions: list) -> list:
     """
     for entity in entities:
         label = entity.get("label", entity.get("metric", entity.get("linked_to", "")))
-        entity_type = entity.get("type", "")
 
         for m in mentions:
             m_raw = m.get("raw_mention", "")
-            m_inferred = m.get("inferred_as")  # original transcript text if LLM changed it
+            m_inferred = m.get("inferred_as")
 
             # Exact match on raw_mention
             if m_raw.lower() == label.lower():
                 if m_inferred:
-                    # LLM changed the term — record original transcript text
                     entity["_raw_mention"] = m_inferred
                     print(f"⚙️  attach_raw_mention: '{m_inferred}' → '{label}' (inferred by mention LLM)")
                 break
 
-            # Match via inferred_as — raw_mention was normalized
+            # Match via inferred_as
             if m_inferred and m_raw.lower() == label.lower():
                 entity["_raw_mention"] = m_inferred
                 print(f"⚙️  attach_raw_mention: '{m_inferred}' → '{label}' (via inferred_as)")
                 break
 
     return entities
+
+

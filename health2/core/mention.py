@@ -237,6 +237,24 @@ symptom
   Do NOT invent a clinical label on the user's behalf.
   A symptom must come from the user's own description, not from LLM inference.
 
+  OCCURRENCE UNCERTAINTY RULE — applies before extracting any symptom:
+  If the user expresses uncertainty about whether a finding even occurred, do NOT extract it.
+  Phrases like "if not red", "maybe red", "possibly X but I'm not sure", "I don't know if it was red"
+  indicate the user is not confirming the finding — they are questioning whether it happened.
+  Uncertainty about occurrence is not the same as a confirmed finding → OMIT.
+  "itchy and tingly if not red" → itching/tingling confirmed, redness uncertain → extract itching/tingling, OMIT redness ✅
+  "maybe flushing, I couldn't tell" → not confirmed → OMIT ✅
+
+  LABEL PRESERVATION RULE — applies when assigning the label field:
+  Use the user's own words as the label whenever possible.
+  Do NOT substitute a clinical equivalent for the user's informal but specific term.
+  The label must reflect the user's own vocabulary, not LLM inference.
+  "spacey" → label: "spacey" ✅ — do NOT replace with "altered mental state" or "cognitive impairment" ❌
+  "brain fog" → label: "brain fog" ✅
+  "dizzy" → label: "dizziness" is acceptable (direct equivalent), but "vertigo" is NOT ❌
+  If the user's word is specific and trackable, keep it. Only normalize obvious mishearings
+  (per the raw_mention / inferred_as rules), not informal-but-clear symptom descriptions.
+
   Similarly, if the user uses informal vague language that could map to multiple
   clinical concepts → do NOT assign a clinical label. Omit entirely.
   "freak out" → could be panic, anxiety, dysautonomia, anger — do not label → OMIT
@@ -564,6 +582,24 @@ theory
   Also use for clinician recommendations or proposed future interventions
   the user is relaying but has not yet acted on.
 
+  LINKED_TO RULE — mandatory for every theory:
+  After confirming a theory passes all checks above, you MUST identify what the theory is ABOUT.
+  In the causal claim X → Y, Y is the effect — the symptom, finding, or health outcome
+  the user is speculating about.
+  Set linked_to_label to the label of that finding.
+  If a matching symptom or other entity was extracted in this same note, use its exact label.
+  Only leave linked_to_label null if Y genuinely cannot be identified from the transcript.
+
+  Examples:
+  "I don't know if it was the sugar in the french toast causing the reaction" →
+    X = sugar/french toast, Y = the reaction (forehead itching, tingling) →
+    linked_to_label: "forehead itching" (or whichever symptom label was extracted) ✅
+  "Maybe the cold plunge is affecting my lymph nodes" →
+    Y = lymph node swelling → linked_to_label: "lymph node swelling" ✅
+  "Probably stress caused it" →
+    Y = whatever symptom "it" refers to in context → resolve pronoun, fill linked_to_label ✅
+  A theory with a resolvable Y and linked_to_label: null is an extraction error.
+
 outside
   Something about the external world — equipment issues, procurement problems,
   missed recordings, provider operational notes.
@@ -788,7 +824,57 @@ Answer all:
   the intensity of something else? If the latter → OMIT entirely.
 - Is this a named clinical finding the user is actively reporting as a problem? → If no: OMIT
 
-If symptom survives step 2 → extract as symptom.
+  SINGLE EXPERIENCE RULE — apply before splitting any symptom into multiple mentions:
+  If the user describes what is clearly ONE subjective experience using multiple words
+  connected by "and", "or", "like", or listed together in the same breath → extract as
+  ONE mention only. Do not split into separate mentions.
+
+  The test: are these words describing the SAME feeling from different angles,
+  or are they genuinely distinct clinical findings?
+
+  Same feeling, different words → ONE mention:
+  "spacey and drunk-like" → one experience, one mention
+  "foggy and out of it" → one experience, one mention
+  "dizzy and lightheaded" → one experience, one mention
+  "itchy and tingly around the hairline" → one experience, one mention (shared location)
+
+  Genuinely distinct findings → separate mentions:
+  "headache and nausea" → two distinct clinical findings → two mentions ✅
+  "nocturia and hot flashes" → two distinct phenomena → two mentions ✅
+  "knee pain and swollen lymph nodes" → different body parts, different findings → two mentions ✅
+
+  When in doubt: if the user uses hedging language to equate them
+  ("or", "like", "if that makes sense", "I mean") → ONE mention.
+  Use the most specific label from the combined description.
+  Put the full description in the context field.
+
+If symptom survives step 2 → assign confidence before extracting:
+
+CONFIDENCE ASSIGNMENT — mandatory for every symptom that passes step 2:
+Ask: "Does my chosen label use the user's own word, or did I select a clinical
+equivalent that differs from what the user actually said?"
+
+confidence: high — the user's own word IS the label (or a direct equivalent):
+  "nausea" → label: "nausea" ✅
+  "headache" → label: "headache" ✅
+  "nocturia" → label: "nocturia" ✅
+  "hot flash" → label: "hot flash" ✅
+  "itching around hairline" → label: "forehead itching" ✅ (direct equivalent)
+  "tingling in forehead" → label: "forehead tingling" ✅ (direct equivalent)
+
+confidence: low — you chose a clinical label that differs from the user's own word:
+  "spacey" → label: "altered mental state" → confidence: low ✅
+  "drunk-like without alcohol" → label: "lightheadedness" → confidence: low ✅
+  "a bit off" → label: "malaise" → confidence: low ✅
+  "foggy" → label: "cognitive impairment" → confidence: low ✅
+
+The test: would the user recognize their experience in your label immediately,
+or did you interpret and translate their word into clinical language?
+If you interpreted → confidence: low.
+
+When confidence: low → still extract the symptom, use your best label.
+The system will route it to Gabriel for review.
+
 If eliminated → note why and continue.
 
 STEP 3 — ELIMINATE theory:
@@ -878,6 +964,14 @@ STEP 3 — ELIMINATE theory:
   "I'm thinking of going to Tokyo for a blood test", "should I see the dermatologist",
   "I need to find a clinic" → operational/procurement → outside
 - Is this about the user's own body/health? → If no: outside
+
+- LINKED_TO STEP — mandatory before finalizing any theory:
+  Identify Y (the effect) from the causal claim X → Y.
+  Scan this note for a symptom or finding that matches Y.
+  If found → set linked_to_label to that entity's exact label.
+  If Y is clear but no matching entity was extracted → still fill linked_to_label with the best label for Y.
+  Only leave linked_to_label null if Y cannot be determined at all.
+  A theory with a resolvable Y and linked_to_label: null is an extraction error.
 
 If theory survives step 3 → extract as theory.
 
