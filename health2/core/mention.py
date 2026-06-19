@@ -15,7 +15,7 @@ except ImportError:
 
 CANDIDATE_TYPES = [
     "intake", "symptom", "activity", "machine", "device",
-    "measurement", "meal", "intervention", "outcome", "theory", "outside", "context", "other"
+    "measurement", "meal", "intervention", "outcome", "theory", "outside", "context", "flight", "other"
 ]
 
 
@@ -429,6 +429,10 @@ intervention
   - "Had the FMT treatment yesterday" → intake (single session, no protocol implied)
   - "Took paracetamol" → intake
   - "Did Novothor" → machine (single session)
+  - Surgery, procedure, or operation done to the user → context (not intervention)
+    Surgery is a reference point, not a protocol the user is actively running.
+    "since the surgery", "after the operation", "post-surgery" → context, related_to: the symptoms it explains
+    Do NOT extract surgery as intervention even if it has a recovery period.
 
   DUAL EXTRACTION RULE — intervention + intake birlikte:
   If the user mentions a protocol AND reports taking a specific dose today or recently,
@@ -707,6 +711,27 @@ context
   "Lactic device delivered, needs calibration" → which entity does this explain? None → outside ❌
   "Resting heart rate has been fixed" → which entity does this explain? None in this note → omit ❌
   "Caught this from Yuki" → explains illness context → context ✅
+
+flight
+  The user traveled by air — they flew from one place to another.
+  Only extract if the flight clearly happened (past tense, confirmed).
+  Do NOT extract planned or future flights — those are future_plan and should be omitted.
+  Do NOT extract if the user only mentions an airport in passing without confirming travel.
+
+  raw_mention: write the route as "origin → destination" (e.g. "London → New York").
+    If only one city is mentioned, write what you have (e.g. "London → unknown").
+  context: include any timing language the user uses ("yesterday morning", "last Tuesday").
+  temporal_evidence: use explicit_today or explicit_past as appropriate.
+    Most flights will be explicit_past unless Gabriel is reporting from the plane.
+
+  The flight pipeline handles all enrichment (duration, cabin class, airline).
+  Your only job here is to detect that a flight happened and route it correctly.
+
+  Examples:
+  "I flew from London to New York yesterday" → flight ✅, raw_mention: "London → New York"
+  "Landed in Dubai this morning" → flight ✅ (origin unknown, destination Dubai)
+  "Flying to Tokyo next week" → future_plan → OMIT ❌
+  "I was at Heathrow airport" → no confirmed travel → OMIT ❌
 
 other
   Health-relevant but does not fit the above.

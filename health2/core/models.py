@@ -40,6 +40,7 @@ CandidateType = Literal[
     "theory",
     "outside",
     "context",
+    "flight",
     "other"
 ]
 
@@ -200,6 +201,20 @@ class TheoryEntity(BaseModel):
     linked_to_type: Optional[str] = None
 
 
+class FlightEntity(BaseModel):
+    type: Literal["flight"]
+    label: Literal["flight"] = "flight"  # fixed label — flight details are in origin/destination
+    origin: str                           # departure city or IATA code (e.g. "LHR", "London")
+    destination: str                      # arrival city or IATA code
+    flight_date: Optional[str] = None    # user's own words: "yesterday", "last Tuesday", "2025-11-10"
+    departure_time: Optional[str] = None # local time at origin: "9 AM", "morning"
+    arrival_time: Optional[str] = None   # local time at destination
+    duration_minutes: Optional[int] = None  # total in-flight time; only if explicitly stated or calculable
+    cabin_class: Optional[str] = None    # "economy", "business", "first" — only if stated
+    airline: Optional[str] = None        # carrier name if mentioned
+    notes: Optional[str] = None          # stopovers, delays, or other details
+
+
 OutsideSubtype = Literal["device_failure", "source_discrepancy", "procurement", "operational", "general"]
 
 class OutsideEntity(BaseModel):
@@ -227,6 +242,7 @@ HealthEntity = Annotated[
         TestEntity,
         ContextEntity,
         TheoryEntity,
+        FlightEntity,
         OutsideEntity,
     ],
     Field(discriminator="type")

@@ -56,6 +56,7 @@ LAYER_MAP = {
     "intervention": "nutrition_layer",
     "theory":       "theory_layer",
     "context":      "context_layer",
+    "flight":       "travel_layer",
     "outside":      "outside_bucket",
 }
 
@@ -64,6 +65,7 @@ LAYER_KEYS = [
     "nutrition_layer",
     "theory_layer",
     "context_layer",
+    "travel_layer",
     "outside_bucket",
 ]
 

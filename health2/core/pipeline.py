@@ -18,6 +18,7 @@ from core.schema_enforcer import enforce_schema
 from core.validate import validate_entities
 from core.intervention_pipeline import run_intervention_pipeline
 from core.intervention_merger import merge_intervention_entities
+from core.flight_pipeline import run_flight_pipeline
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -161,8 +162,11 @@ def run_pipeline(mentions: list, normalized_text: str, note_date=None) -> dict:
     intervention_mentions = [
         m for m in mentions if m.get("candidate_type") == "intervention"
     ]
+    flight_mentions = [
+        m for m in mentions if m.get("candidate_type") == "flight"
+    ]
     normal_mentions = [
-        m for m in mentions if m.get("candidate_type") != "intervention"
+        m for m in mentions if m.get("candidate_type") not in {"intervention", "flight"}
     ]
 
     # ── Normal pipeline ───────────────────────────────────────────────────────
@@ -189,6 +193,11 @@ def run_pipeline(mentions: list, normalized_text: str, note_date=None) -> dict:
         intervention_entities, normal_entities,
         today_date=note_date
     )
+
+    # ── Flight pipeline ───────────────────────────────────────────────────────
+    flight_entities = run_flight_pipeline(flight_mentions, normalized_text, note_date=note_date)
+    if flight_entities:
+        entities = entities + flight_entities
 
     # ── Validate ──────────────────────────────────────────────────────────────
     entities, validation_changes = validate_entities(entities, normalized_text)
