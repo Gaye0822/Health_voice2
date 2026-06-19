@@ -808,7 +808,7 @@ def structure_mentions(mentions: list, normalized_text: str) -> list:
         structure_system = SYSTEM_PROMPT + kb_section
 
     response = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-6",
         max_tokens=6000,
         temperature=0,
         system=structure_system,

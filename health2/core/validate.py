@@ -272,7 +272,7 @@ Return ONLY this JSON:
 If no changes needed, return original entities with empty changes list."""
 
     response = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-6",
         max_tokens=4000,
         temperature=0,
         system=system_prompt,

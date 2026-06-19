@@ -2,10 +2,11 @@
 export_envelopes.py — Export envelopes from DB to individual JSON files.
 
 Usage:
-    python export_envolops.py                        # exports all envelopes
-    python export_envolops.py --limit 5              # exports last 5
-    python export_envolops.py --start 57 --end 85    # exports rows 57 to 85
-    python export_envolops.py --out ./output         # custom output directory
+    python export_envolops.py                                          # exports all envelopes
+    python export_envolops.py --limit 5                                # exports last 5
+    python export_envolops.py --start 57 --end 85                      # exports rows 57 to 85 (row number)
+    python export_envolops.py --transcript_start 171 --transcript_end 218  # exports by transcript_id
+    python export_envolops.py --out ./output                           # custom output directory
 
 Each envelope is saved as a separate JSON file named by source_note_id and note_date:
     exports/2025-12-03_a1b2c3d4.json
@@ -25,7 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core.db import get_db_connection
 
 
-def export_envelopes(output_dir: str = "./exports", limit: int = None, start: int = None, end: int = None):
+def export_envelopes(output_dir: str = "./exports", limit: int = None, start: int = None, end: int = None, transcript_start: int = None, transcript_end: int = None):
     """
     Read envelopes from DB and write each as a separate JSON file.
     Files are named: <note_date>_<source_note_id[:8]>.json
@@ -35,7 +36,14 @@ def export_envelopes(output_dir: str = "./exports", limit: int = None, start: in
     conn = get_db_connection()
     cur = conn.cursor()
 
-    if start is not None and end is not None:
+    if transcript_start is not None and transcript_end is not None:
+        query = f"""
+            SELECT e.source_note_id, e.note_date, e.payload, e.created_at
+            FROM envelopes e
+            WHERE e.transcript_id BETWEEN {transcript_start} AND {transcript_end}
+            ORDER BY e.note_date ASC, e.created_at ASC
+        """
+    elif start is not None and end is not None:
         query = f"""
             SELECT source_note_id, note_date, payload, created_at
             FROM (
@@ -90,6 +98,15 @@ if __name__ == "__main__":
     parser.add_argument("--limit", type=int, default=None, help="Max number of envelopes to export")
     parser.add_argument("--start", type=int, default=None, help="Start row number (1-indexed)")
     parser.add_argument("--end", type=int, default=None, help="End row number (1-indexed)")
+    parser.add_argument("--transcript_start", type=int, default=None, help="Start transcript_id (inclusive)")
+    parser.add_argument("--transcript_end", type=int, default=None, help="End transcript_id (inclusive)")
     args = parser.parse_args()
 
-    export_envelopes(output_dir=args.out, limit=args.limit, start=args.start, end=args.end)
+    export_envelopes(
+        output_dir=args.out,
+        limit=args.limit,
+        start=args.start,
+        end=args.end,
+        transcript_start=args.transcript_start,
+        transcript_end=args.transcript_end,
+    )

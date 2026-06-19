@@ -29,8 +29,8 @@ from datetime import datetime, timezone
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-PIPELINE_VERSION = "1.0.0"
-EXTRACTION_MODEL = "claude-sonnet-4-20250514"
+PIPELINE_VERSION = "2.0.0"
+EXTRACTION_MODEL = "claude-sonnet-4-6"
 TRANSCRIPTION_MODEL = "whisper-1"
 
 # Warning vocabulary — closed set, coordinate before adding new values
