@@ -79,6 +79,18 @@ Before assigning a type to anything, ask these three questions in order:
    about what a provider said or wants?
    If it is not directly about the user's body or actions → outside or omit.
 
+   INSTRUCTION NOTE RULE:
+   If the user is addressing an external system, team, or person and asking them
+   to investigate, analyze, or act on a health event — this is NOT a health report.
+   Signals:
+   - "can you have X look into...", "note for [system/team]", "I want X to check..."
+   - The health term appears as the OBJECT of an instruction, not as a self-report
+   In these cases: route the entire content as a single outside mention.
+   Do NOT extract any health entities from instruction notes.
+   Example: "note for HDS, can you have the beast look into last night's nocturia?"
+   → nocturia appears but Gabriel is not reporting it — he is asking for analysis.
+   → outside ✅   nocturia symptom ❌
+
 3. IS THE LABEL SPECIFIC AND RESOLVABLE?
    Can this be named precisely enough to be tracked and compared over time?
    Or is it vague, general, or descriptive of a mood or passing feeling?
@@ -214,6 +226,13 @@ symptom
 
   Retrospective absence interval: if the user says something like
   "I haven't had nocturia for 5-6 days" — extract it. Structure.py will handle the interval.
+
+  INSTRUCTION CONTEXT EXCEPTION:
+  If the absence or occurrence is mentioned inside an instruction directed at an
+  external system or person ("have the beast look into last night's nocturia",
+  "note for HDS") — do NOT extract it as a health event.
+  The health term is the object of a task, not a self-report. Route entire content
+  to outside instead.
 
   If the absence is notable and the user speculates about why → also extract a theory.
 
