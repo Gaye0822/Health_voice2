@@ -58,8 +58,24 @@ def has_same_session_signal(mention: dict, transcript: str) -> bool:
             if signal in window:
                 return True
 
+    # Bare noun report: no verb = current-session status report
+    _VERBS = ["is", "was", "are", "were", "have", "had", "feel", "felt", "took",
+              "did", "started", "stopped", "noticed", "woke", "slept", "ate",
+              "drank", "measured", "recorded", "reported", "said", "told"]
+    raw_words = mention.get("raw_mention", "").lower().split()
+    if raw_words and not any(v in raw_words for v in _VERBS):
+        return True            
+
     return False
 
+def is_bullet_style_transcript(transcript: str) -> bool:
+    """
+    Detects short, terse bullet-style reports with no temporal signals.
+    These are always current-session reports — Gabriel is listing his status right now.
+    Example: "97.5 Fahrenheit nocturia bowel movement"
+    """
+    word_count = len(transcript.split())
+    return word_count < 40
 
 def filter_mentions(mentions: list, transcript: str) -> tuple:
     """
@@ -124,7 +140,7 @@ def filter_mentions(mentions: list, transcript: str) -> tuple:
                 # they are observed patterns over time
                 kept.append(mention)
                 continue
-            if has_same_session_signal(mention, transcript):
+            if has_same_session_signal(mention, transcript) or is_bullet_style_transcript(transcript):
                 kept.append(mention)
             else:
                 dropped.append({

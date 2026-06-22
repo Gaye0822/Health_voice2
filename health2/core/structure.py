@@ -83,7 +83,8 @@ For each mention, work through these questions before writing the entity:
    - future_plan → omit entirely
    - consultation_relay → omit entirely, EXCEPT factual test results and
      factual measurements which can be extracted normally
-   - unclear → when in doubt, omit
+   - unclear → if mention_filter passed it through, treat as current-session. Structure it.
+     Only omit if the mention itself is genuinely ambiguous (no label, no type resolvable).
 
 3. IS THIS AN OBSERVED FACT OR AN INTERPRETATION?
    Observed facts → event layer (intake, symptom, activity, machine, measurement etc.)
@@ -742,6 +743,12 @@ def structure_mentions(mentions: list, normalized_text: str) -> list:
     mentions, dropped = filter_mentions(mentions, normalized_text)
     log_filtered(dropped)
 
+    # Promote unclear → explicit_today after filter pass
+    # If mention_filter allowed it through, it's safe to treat as current-session
+    for m in mentions:
+        if m.get("temporal_evidence") == "unclear":
+            m["temporal_evidence"] = "explicit_today"
+
     if not mentions:
         return []
 
@@ -914,7 +921,7 @@ def structure_mentions(mentions: list, normalized_text: str) -> list:
                 # Apply event_date hint if entity doesn't already have one
                 if hint_entry["event_date_hint"] and not entity.get("event_date"):
                     entity["event_date"] = hint_entry["event_date_hint"]
-                    print(f"⚙️  event_date hint applied: {etype} '{label}' → event_date: '{hint_entry["event_date_hint"]}'")
+                    print(f"⚙️  event_date hint applied: {etype} '{label}' → event_date: '{hint_entry['event_date_hint']}'")
                 # Apply dose_timing hint if entity doesn't already have one
                 if hint_entry["dose_timing_hint"] and not entity.get("dose_timing"):
                     entity["dose_timing"] = hint_entry["dose_timing_hint"]
