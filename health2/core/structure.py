@@ -757,7 +757,7 @@ def structure_mentions(mentions: list, normalized_text: str) -> list:
     # Fallback: "yesterday" string in reasoning or context
     EVENT_DATE_TYPES_HINT = {"meal", "intake", "symptom", "activity", "machine"}
 
-    # Dose timing slot words — extracted deterministically from context
+    # Dose timing slot words — exmetracted deterministically from context
     DOSE_TIMING_SLOTS = {
         "morning": "morning",
         "lunch": "lunch",
@@ -778,10 +778,15 @@ def structure_mentions(mentions: list, normalized_text: str) -> list:
                 m["_event_date_hint"] = edl
                 # Do NOT continue — still check dose_timing below
         else:
-            reasoning = m.get("reasoning", "").lower()
-            context_text = m.get("context", "").lower()
-            if "yesterday" in reasoning or "yesterday" in context_text:
-                m["_event_date_hint"] = "yesterday"
+            # unclear→explicit_today promotion sonrası buraya düşenler dahil,
+            # explicit_today için reasoning/context'teki "yesterday" kelimesi
+            # (genellikle belirsizliği açıklarken kullanılıyor, gerçek kanıt değil)
+            # event_date üretmemeli.
+            if m.get("temporal_evidence") != "explicit_today":
+                reasoning = m.get("reasoning", "").lower()
+                context_text = m.get("context", "").lower()
+                if "yesterday" in reasoning or "yesterday" in context_text:
+                    m["_event_date_hint"] = "yesterday"
 
         # Deterministic dose_timing injection for intake mentions
         # Extract slot word from context if present and dose_timing not already set
